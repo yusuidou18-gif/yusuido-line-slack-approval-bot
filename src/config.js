@@ -38,7 +38,7 @@ export function getConfig() {
   loadEnvFile();
 
   return {
-    port: Number(process.env.PORT || 3000),
+    port: parsePort(process.env.PORT),
     publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
     companyPhone: process.env.COMPANY_PHONE || "",
     businessHoursText: process.env.BUSINESS_HOURS_TEXT || "",
@@ -64,4 +64,10 @@ export function getConfig() {
       calendarIds: optionalJson("GOOGLE_CALENDAR_IDS", [])
     }
   };
+}
+
+function parsePort(value) {
+  const parsed = Number(value || 3000);
+  if (Number.isInteger(parsed) && parsed >= 0 && parsed < 65536) return parsed;
+  return process.env.RENDER ? 10000 : 3000;
 }

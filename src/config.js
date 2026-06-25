@@ -54,6 +54,7 @@ export function getConfig() {
       channelId: process.env.SLACK_CHANNEL_ID || "",
       presidentUserId: process.env.SLACK_PRESIDENT_USER_ID || "",
       officeUserId: process.env.SLACK_OFFICE_USER_ID || "",
+      officeUserIds: optionalJson("SLACK_OFFICE_USER_IDS", []).filter(Boolean),
       staffUserIds: optionalJson("SLACK_STAFF_USER_IDS", {})
     },
 

@@ -138,6 +138,9 @@ function buildMentions(config, request) {
   if (request.staffSlackUserId) ids.add(request.staffSlackUserId);
   if (config.slack.presidentUserId) ids.add(config.slack.presidentUserId);
   if (!request.staffSlackUserId && config.slack.officeUserId) ids.add(config.slack.officeUserId);
+  if (!request.staffSlackUserId) {
+    for (const id of config.slack.officeUserIds || []) ids.add(id);
+  }
   return [...ids].map((id) => `<@${id}>`).join(" ");
 }
 

@@ -244,10 +244,14 @@ function applySlackAction(request, actionId, userId) {
   if (actionId !== "approve") return request;
 
   const isPresident = userId && userId === config.slack.presidentUserId;
+  const officeUserIds = new Set([
+    config.slack.officeUserId,
+    ...(config.slack.officeUserIds || [])
+  ].filter(Boolean));
   const isStaff =
     userId &&
     (userId === request.staffSlackUserId ||
-      (!request.staffSlackUserId && userId === config.slack.officeUserId));
+      (!request.staffSlackUserId && officeUserIds.has(userId)));
 
   const approvals = { ...request.approvals };
   if (isPresident) approvals.president = { userId, at: now };

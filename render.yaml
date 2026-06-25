@@ -32,6 +32,8 @@ services:
         sync: false
       - key: SLACK_OFFICE_USER_ID
         sync: false
+      - key: SLACK_OFFICE_USER_IDS
+        sync: false
       - key: SLACK_STAFF_USER_IDS
         value: "{}"
       - key: GOOGLE_CLIENT_EMAIL

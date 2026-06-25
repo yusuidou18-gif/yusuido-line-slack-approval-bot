@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: yusuido-line-slack-approval-bot
+    runtime: node
+    plan: starter
+    buildCommand: ""
+    startCommand: node src/server.js
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: 24
+      - key: PORT
+        value: 10000
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: COMPANY_PHONE
+        sync: false
+      - key: BUSINESS_HOURS_TEXT
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: SLACK_SIGNING_SECRET
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_CHANNEL_ID
+        sync: false
+      - key: SLACK_PRESIDENT_USER_ID
+        sync: false
+      - key: SLACK_OFFICE_USER_ID
+        sync: false
+      - key: SLACK_STAFF_USER_IDS
+        value: "{}"
+      - key: GOOGLE_CLIENT_EMAIL
+        sync: false
+      - key: GOOGLE_PRIVATE_KEY
+        sync: false
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+      - key: GOOGLE_CALENDAR_IDS
+        value: "[]"

@@ -1,0 +1,5 @@
+.env
+data/*.json
+!data/.gitkeep
+work/
+node_modules/

@@ -1,0 +1,15 @@
+{
+  "name": "yusuido-line-slack-approval-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node scripts/check-syntax.js",
+    "validate:env": "node scripts/validate-env.js",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

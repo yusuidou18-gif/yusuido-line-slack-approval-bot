@@ -248,10 +248,12 @@ function applySlackAction(request, actionId, userId) {
     config.slack.officeUserId,
     ...(config.slack.officeUserIds || [])
   ].filter(Boolean));
+  const configuredStaffUserIds = new Set(Object.values(config.slack.staffUserIds || {}).filter(Boolean));
   const isStaff =
     userId &&
     (userId === request.staffSlackUserId ||
-      (!request.staffSlackUserId && officeUserIds.has(userId)));
+      (!request.staffSlackUserId &&
+        (officeUserIds.has(userId) || configuredStaffUserIds.has(userId))));
 
   const approvals = { ...request.approvals };
   if (isPresident) approvals.president = { userId, at: now };

@@ -6,7 +6,7 @@ export async function pushLineMessage(config, to, text) {
     return { ok: true, fallback: true };
   }
 
-  return postJson(
+  const response = await postJson(
     "https://api.line.me/v2/bot/message/push",
     {
       to,
@@ -14,6 +14,12 @@ export async function pushLineMessage(config, to, text) {
     },
     { authorization: `Bearer ${config.line.channelAccessToken}` }
   );
+
+  if (Object.hasOwn(response, "ok") && !response.ok) {
+    throw new Error(`LINE push error: ${response.message || response.error || "unknown_error"}`);
+  }
+
+  return response;
 }
 
 export function extractTextEvents(payload) {

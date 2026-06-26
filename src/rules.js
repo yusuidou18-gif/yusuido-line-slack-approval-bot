@@ -63,7 +63,10 @@ export function analyzeMessage(text, caseInfo) {
 
   const urgency = highHit ? "高" : mediumHit ? "中" : "低";
   const presidentRequired = Boolean(highHit || presidentHit);
-  const isOb = /以前|前回|また|いつも|OB|リピート/.test(normalized);
+  const driveCustomerType = String(caseInfo?.case?.customerType || "");
+  const isOb =
+    /以前|前回|また|いつも|OB|リピート/.test(normalized) ||
+    /OB|リピーター|既存|再依頼/i.test(driveCustomerType);
 
   const reasons = [];
   if (highHit) reasons.push(`「${highHit}」を含むため緊急度を高と判定`);

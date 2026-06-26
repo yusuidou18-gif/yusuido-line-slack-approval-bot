@@ -67,12 +67,13 @@ async function processLineTextEvent(event) {
     findDriveCaseInfo(config, text, sourceUserId)
   );
   const calendarInfo = await safe("Google Calendar search", () =>
-    findCalendarAvailability(config)
+    findCalendarAvailability(config, caseInfo)
   );
   const analysis = analyzeMessage(text, caseInfo);
 
   const staffName = detectStaffName(caseInfo);
   const staffSlackUserId = staffName ? config.slack.staffUserIds[staffName] : "";
+  const driveCase = caseInfo?.case || {};
   const request = {
     id: createId("approval"),
     createdAt: new Date().toISOString(),
@@ -80,12 +81,12 @@ async function processLineTextEvent(event) {
     lineUserId: sourceUserId,
     replyToken: event.replyToken,
     customerMessage: text,
-    customerName: detectCustomerName(text),
-    caseId: detectCaseId(text),
-    customerType: analysis.isOb ? "OB" : "新規/未確認",
-    staffName: staffName || "未確認",
+    customerName: driveCase.customerName || detectCustomerName(text),
+    caseId: driveCase.caseId || detectCaseId(text),
+    customerType: driveCase.customerType || (analysis.isOb ? "OB" : "\u672a\u78ba\u8a8d"),
+    staffName: staffName || "\u672a\u78ba\u8a8d",
     staffSlackUserId,
-    caseStatus: "未確認",
+    caseStatus: driveCase.caseStatus || "\u672a\u78ba\u8a8d",
     urgency: analysis.urgency,
     presidentRequired: analysis.presidentRequired,
     reason: buildReason(analysis, caseInfo, calendarInfo),
@@ -338,16 +339,42 @@ async function safe(label, fn) {
 
 function buildReason(analysis, caseInfo, calendarInfo) {
   const parts = [analysis.reason];
-  if (caseInfo?.error) parts.push(`Google Drive確認エラー: ${caseInfo.error}`);
-  if (calendarInfo?.error) parts.push(`Googleカレンダー確認エラー: ${calendarInfo.error}`);
-  return parts.join("。");
+  if (caseInfo?.note) parts.push(caseInfo.note);
+  const slots = summarizeAvailableSlots(calendarInfo);
+  if (slots.length) parts.push(`\u73fe\u8abf\u5019\u88dc: ${slots.join(" / ")}`);
+  if (caseInfo?.error) parts.push(`Google Drive\u78ba\u8a8d\u30a8\u30e9\u30fc: ${caseInfo.error}`);
+  if (calendarInfo?.error) parts.push(`Google\u30ab\u30ec\u30f3\u30c0\u30fc\u78ba\u8a8d\u30a8\u30e9\u30fc: ${calendarInfo.error}`);
+  return parts.join("\u3002 ");
+}
+
+function summarizeAvailableSlots(calendarInfo) {
+  if (!Array.isArray(calendarInfo)) return [];
+  return calendarInfo
+    .flatMap((calendar) =>
+      (calendar.availableSlots || []).slice(0, 3).map((slot) => {
+        const start = new Date(slot.start);
+        const label = new Intl.DateTimeFormat("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          month: "numeric",
+          day: "numeric",
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit"
+        }).format(start);
+        return `${calendar.name || calendar.calendarId} ${label}`;
+      })
+    )
+    .slice(0, 5);
 }
 
 function summarizeCalendar(calendarInfo) {
   if (!Array.isArray(calendarInfo)) return calendarInfo;
   return calendarInfo.map((calendar) => ({
     calendarId: calendar.calendarId,
+    name: calendar.name,
+    staffName: calendar.staffName,
     eventCount: calendar.events.length,
+    availableSlots: calendar.availableSlots || [],
     nextEvents: calendar.events.slice(0, 3).map((event) => ({
       summary: event.summary,
       start: event.start
@@ -356,18 +383,19 @@ function summarizeCalendar(calendarInfo) {
 }
 
 function detectCustomerName(text) {
-  const match = text.match(/([一-龥ぁ-んァ-ン]{2,8})(様|さん|さま)/);
-  return match ? `${match[1]}様` : "未確認";
+  const match = text.match(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc]{2,12})(\u69d8|\u3055\u3093|\u3055\u307e)/u);
+  return match ? `${match[1]}\u69d8` : "\u672a\u78ba\u8a8d";
 }
 
 function detectCaseId(text) {
   const match = text.match(/[A-Z]{1,5}-?\d{3,}/i);
-  return match ? match[0] : "未確認";
+  return match ? match[0] : "\u672a\u78ba\u8a8d";
 }
 
 function detectStaffName(caseInfo) {
+  if (caseInfo?.case?.staffName) return caseInfo.case.staffName;
   const files = caseInfo?.matchedFiles || [];
-  const joined = files.map((file) => file.name).join(" ");
-  const match = joined.match(/担当[:：_\-\s]?([一-龥ぁ-んァ-ン]{2,6})/);
+  const joined = files.map((file) => `${file.name} ${file.textPreview || ""}`).join(" ");
+  const match = joined.match(/(?:\u62c5\u5f53\u8005|\u55b6\u696d\u62c5\u5f53|\u62c5\u5f53|\u73fe\u8abf\u62c5\u5f53)\s*[\uff1a:\-\s]\s*([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc]{2,12})/u);
   return match ? match[1] : "";
 }

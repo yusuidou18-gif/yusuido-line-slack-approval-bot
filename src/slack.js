@@ -124,9 +124,9 @@ function buildSlackMessage(config, request) {
       {
         type: "actions",
         elements: [
-          button("承認", "approve", request.id, "primary"),
-          button("修正依頼", "revise", request.id),
-          button("却下", "reject", request.id, "danger")
+          button("承認", "approve", request, "primary"),
+          button("修正依頼", "revise", request),
+          button("却下", "reject", request, "danger")
         ]
       }
     ]
@@ -158,14 +158,19 @@ function section(text) {
   };
 }
 
-function button(text, action, requestId, style) {
+function button(text, action, request, style) {
   return {
     type: "button",
     text: { type: "plain_text", text },
-    value: requestId,
+    value: buildActionValue(request),
     action_id: action,
     ...(style ? { style } : {})
   };
+}
+
+function buildActionValue(request) {
+  if (typeof request === "string") return request;
+  return JSON.stringify({ id: request.id, u: request.lineUserId });
 }
 
 function formatSlackFallback(request) {

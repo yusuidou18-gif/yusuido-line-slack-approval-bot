@@ -131,7 +131,8 @@ async function handleSlackAction(req, res) {
   }
 
   const action = payload.actions?.[0];
-  const requestId = action?.value;
+  const actionValue = parseActionValue(action?.value);
+  const requestId = actionValue.id;
   const actionId = action?.action_id;
   const userId = payload.user?.id;
 
@@ -159,9 +160,20 @@ async function handleSlackAction(req, res) {
     return sendText(res, 200, "修正内容を入力してください。");
   }
 
-  const updated = await updateRequest(requestId, (request) =>
+  let updated = await updateRequest(requestId, (request) =>
     applySlackAction(request, actionId, userId)
   );
+
+  if (!updated && actionId === "approve" && actionValue.lineUserId) {
+    const fallback = buildFallbackRequestFromSlackPayload(requestId, actionValue.lineUserId, payload);
+    if (!fallback.replyDraft) {
+      return sendText(res, 404, "Request not found and reply draft could not be restored");
+    }
+    await saveRequest(fallback);
+    updated = await updateRequest(requestId, (request) =>
+      applySlackAction(request, actionId, userId)
+    );
+  }
 
   if (!updated) return sendText(res, 404, "Request not found");
 
@@ -272,6 +284,47 @@ function applySlackAction(request, actionId, userId) {
       }
     ]
   };
+}
+
+function parseActionValue(value) {
+  if (!value) return { id: "", lineUserId: "" };
+  try {
+    const parsed = JSON.parse(value);
+    return {
+      id: parsed.id || "",
+      lineUserId: parsed.u || ""
+    };
+  } catch {
+    return { id: value, lineUserId: "" };
+  }
+}
+
+function buildFallbackRequestFromSlackPayload(requestId, lineUserId, payload) {
+  const now = new Date().toISOString();
+  return {
+    id: requestId,
+    createdAt: now,
+    status: "pending",
+    lineUserId,
+    customerMessage: extractSlackBlockText(payload, 3),
+    replyDraft: extractSlackBlockText(payload, 4),
+    approvals: {
+      staff: null,
+      president: null
+    },
+    history: [
+      {
+        at: now,
+        type: "restored_from_slack",
+        note: "Restored minimum request data from Slack action payload"
+      }
+    ]
+  };
+}
+
+function extractSlackBlockText(payload, index) {
+  const text = payload.message?.blocks?.[index]?.text?.text || "";
+  return text.replace(/^\*.*?\*\n/s, "").replace(/^>/gm, "").trim();
 }
 
 async function safe(label, fn) {

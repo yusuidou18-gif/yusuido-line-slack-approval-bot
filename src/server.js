@@ -259,7 +259,7 @@ function applySlackAction(request, actionId, userId) {
   if (isPresident) approvals.president = { userId, at: now };
   if (isStaff) approvals.staff = { userId, at: now };
 
-  const ready = Boolean(approvals.staff && approvals.president);
+  const ready = Boolean(approvals.staff || approvals.president);
   return {
     ...request,
     approvals,

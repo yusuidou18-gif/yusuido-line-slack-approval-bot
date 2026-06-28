@@ -151,12 +151,14 @@ export async function findDriveCaseInfo(config, messageText, sourceUserId) {
   };
 }
 
-export async function findCalendarAvailability(config, caseInfo) {
+export async function findCalendarAvailability(config, caseInfo, messageText = "") {
   if (!config.google.calendarIds.length) return [];
 
   const now = new Date();
+  const preference = parseSchedulePreference(messageText, now);
   const timeMin = now.toISOString();
-  const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  const searchDays = preference.explicitDates.length ? 60 : 21;
+  const timeMax = new Date(now.getTime() + searchDays * 24 * 60 * 60 * 1000).toISOString();
   const results = [];
   const calendars = normalizeCalendarConfigs(config.google.calendarIds, caseInfo?.case?.staffName);
 
@@ -180,7 +182,8 @@ export async function findCalendarAvailability(config, caseInfo) {
       name: calendar.name || calendar.id,
       staffName: calendar.staffName || "",
       events,
-      availableSlots: buildAvailableSlots(events)
+      preference,
+      availableSlots: buildAvailableSlots(events, preference)
     });
   }
 
@@ -354,15 +357,18 @@ function normalizeCalendarConfigs(calendarIds, staffName) {
   return (filtered.length ? filtered : normalized).filter((calendar) => calendar.id);
 }
 
-function buildAvailableSlots(events) {
+function buildAvailableSlots(events, preference = emptySchedulePreference()) {
   const slots = [];
   const now = new Date();
+  const maxDays = preference.explicitDates.length ? 60 : 21;
+  const slotHours = preference.hours.length ? preference.hours : SITE_VISIT_SLOT_HOURS_JST;
 
-  for (let dayOffset = 1; dayOffset <= 14 && slots.length < 6; dayOffset += 1) {
+  for (let dayOffset = 1; dayOffset <= maxDays && slots.length < 6; dayOffset += 1) {
     const base = toJstParts(new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000));
     if (base.weekday === 0 || base.weekday === 1) continue;
+    if (!matchesSchedulePreference(base, preference)) continue;
 
-    for (const hour of SITE_VISIT_SLOT_HOURS_JST) {
+    for (const hour of slotHours) {
       const start = fromJstParts(base.year, base.month, base.day, hour, 0);
       const end = new Date(start.getTime() + 60 * 60 * 1000);
       if (!hasConflict(events, start, end)) {
@@ -373,6 +379,109 @@ function buildAvailableSlots(events) {
   }
 
   return slots;
+}
+
+function parseSchedulePreference(text, now = new Date()) {
+  const normalized = String(text || "").normalize("NFKC");
+  const preference = emptySchedulePreference();
+
+  const weekdayMap = [
+    ["日", 0, /日曜|日曜日|日\b/],
+    ["月", 1, /月曜|月曜日|月\b/],
+    ["火", 2, /火曜|火曜日|火\b/],
+    ["水", 3, /水曜|水曜日|水\b/],
+    ["木", 4, /木曜|木曜日|木\b/],
+    ["金", 5, /金曜|金曜日|金\b/],
+    ["土", 6, /土曜|土曜日|土\b/]
+  ];
+
+  if (/土日|週末/.test(normalized)) {
+    preference.weekdays.push(6, 0);
+  }
+  if (/平日/.test(normalized)) {
+    preference.weekdays.push(2, 3, 4, 5);
+  }
+  for (const [, value, pattern] of weekdayMap) {
+    if (pattern.test(normalized)) preference.weekdays.push(value);
+  }
+
+  const current = toJstParts(now);
+  const datePattern = /(?:(\d{4})[年\/.-])?(\d{1,2})[月\/.-](\d{1,2})日?/g;
+  for (const match of normalized.matchAll(datePattern)) {
+    let year = match[1] ? Number(match[1]) : current.year;
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!isValidMonthDay(month, day)) continue;
+    if (!match[1] && isPastJstDate(year, month, day, current)) year += 1;
+    preference.explicitDates.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  }
+
+  if (/明日/.test(normalized)) {
+    const target = toJstParts(new Date(now.getTime() + 24 * 60 * 60 * 1000));
+    preference.explicitDates.push(formatJstDateKey(target));
+  }
+  if (/明後日|あさって/.test(normalized)) {
+    const target = toJstParts(new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000));
+    preference.explicitDates.push(formatJstDateKey(target));
+  }
+
+  if (/午前|朝|10時|10:00/.test(normalized)) preference.hours.push(10);
+  if (/午後|昼|13時|13:00/.test(normalized)) preference.hours.push(13, 15, 17);
+  if (/15時|15:00/.test(normalized)) preference.hours.push(15);
+  if (/夕方|17時|17:00/.test(normalized)) preference.hours.push(17);
+  const timePattern = /([01]?\d|2[0-3])(?::[0-5]\d|時)/g;
+  for (const match of normalized.matchAll(timePattern)) {
+    preference.hours.push(...nearestSiteVisitSlotHours(Number(match[1])));
+  }
+
+  preference.weekdays = [...new Set(preference.weekdays)];
+  preference.explicitDates = [...new Set(preference.explicitDates)];
+  preference.hours = [...new Set(preference.hours)].filter((hour) =>
+    SITE_VISIT_SLOT_HOURS_JST.includes(hour)
+  );
+
+  return preference;
+}
+
+function emptySchedulePreference() {
+  return { weekdays: [], explicitDates: [], hours: [] };
+}
+
+function matchesSchedulePreference(day, preference) {
+  const hasExplicitDates = preference.explicitDates.length > 0;
+  const hasWeekdays = preference.weekdays.length > 0;
+  if (hasExplicitDates && !preference.explicitDates.includes(formatJstDateKey(day))) return false;
+  if (!hasExplicitDates && hasWeekdays && !preference.weekdays.includes(day.weekday)) return false;
+  return true;
+}
+
+function formatJstDateKey(day) {
+  return `${day.year}-${String(day.month).padStart(2, "0")}-${String(day.day).padStart(2, "0")}`;
+}
+
+function isPastJstDate(year, month, day, current) {
+  return (
+    year < current.year ||
+    (year === current.year && month < current.month) ||
+    (year === current.year && month === current.month && day <= current.day)
+  );
+}
+
+function isValidMonthDay(month, day) {
+  if (!Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(2024, month - 1, day));
+  return date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function nearestSiteVisitSlotHours(hour) {
+  const ranked = SITE_VISIT_SLOT_HOURS_JST
+    .map((slotHour) => ({ slotHour, distance: Math.abs(slotHour - hour) }))
+    .sort((a, b) => a.distance - b.distance || a.slotHour - b.slotHour);
+  const nearestDistance = ranked[0]?.distance ?? 0;
+  return ranked
+    .filter((item) => item.distance === nearestDistance || item.distance <= 1)
+    .map((item) => item.slotHour);
 }
 
 function isSiteVisitStaffName(value) {

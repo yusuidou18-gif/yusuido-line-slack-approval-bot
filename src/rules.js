@@ -186,6 +186,7 @@ export function buildReplyDraft({ text, analysis, config, caseInfo, calendarInfo
 function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
   const caseData = caseInfo?.case || {};
   const slots = summarizeSiteVisitSlots(calendarInfo);
+  const schedulePreference = summarizeSchedulePreference(calendarInfo);
   const phone = config?.companyPhone || DEFAULT_PHONE;
   const hours = config?.businessHoursText || DEFAULT_BUSINESS_HOURS;
   const hasCase = Boolean(caseInfo?.matchedFiles?.length);
@@ -204,6 +205,7 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
     estimateStatus,
     constructionSchedule,
     slots,
+    schedulePreference,
     phone,
     hours,
     slotLine: slots.length
@@ -211,6 +213,7 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
       : "",
     staffLine: "担当者が内容を確認いたします。",
     caseLine: hasCase ? "過去のやり取りも確認したうえでご案内いたします。" : "必要な情報を確認しながら進めさせていただきます。",
+    noSlotLine: buildNoSlotLine(schedulePreference),
     hoursLine: `受付時間の目安は${hours}です。`
   };
 }
@@ -262,8 +265,10 @@ function buildSiteVisitReply(ctx) {
 
   if (ctx.slotLine) {
     lines.push(ctx.slotLine);
+  } else if (ctx.noSlotLine) {
+    lines.push(ctx.noSlotLine);
   } else {
-    lines.push("現地確認が必要な場合は、下村または菅野の予定を確認して日程をご相談いたします。");
+    lines.push("現地確認が必要な場合は、空き状況を確認して日程をご相談いたします。");
   }
 
   lines.push(
@@ -283,6 +288,8 @@ function buildScheduleReply(ctx) {
 
   if (ctx.slotLine) {
     lines.push(ctx.slotLine);
+  } else if (ctx.noSlotLine) {
+    lines.push(ctx.noSlotLine);
   } else {
     lines.push("営業時間は10:00-19:00、定休日は日曜・月曜です。候補日を確認してご案内いたします。");
   }
@@ -354,6 +361,39 @@ function summarizeSiteVisitSlots(calendarInfo) {
       })
     );
   return [...new Set(labels)].slice(0, 4);
+}
+
+function summarizeSchedulePreference(calendarInfo) {
+  if (!Array.isArray(calendarInfo)) return { weekdays: [], explicitDates: [], hours: [] };
+  const preference = calendarInfo.find((calendar) => calendar.preference)?.preference || {};
+  return {
+    weekdays: Array.isArray(preference.weekdays) ? preference.weekdays : [],
+    explicitDates: Array.isArray(preference.explicitDates) ? preference.explicitDates : [],
+    hours: Array.isArray(preference.hours) ? preference.hours : []
+  };
+}
+
+function buildNoSlotLine(preference) {
+  const hasPreference =
+    preference.weekdays.length || preference.explicitDates.length || preference.hours.length;
+  if (!hasPreference) return "";
+
+  const closedOnly =
+    (preference.weekdays.length > 0 && preference.weekdays.every((day) => day === 0 || day === 1)) ||
+    (preference.explicitDates.length > 0 && preference.explicitDates.every((date) => isClosedDateKey(date)));
+
+  if (closedOnly) {
+    return "日曜・月曜は定休日のため、火曜から土曜の営業時間内（10:00-19:00）で候補日を確認いたします。";
+  }
+
+  return "ご希望に近い日程を確認いたしましたが、現時点で自動候補が見つかりませんでした。空き状況を確認して、あらためて候補日をご案内いたします。";
+}
+
+function isClosedDateKey(dateKey) {
+  const [year, month, day] = String(dateKey || "").split("-").map(Number);
+  if (!year || !month || !day) return false;
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return weekday === 0 || weekday === 1;
 }
 
 function isSiteVisitStaff(value) {

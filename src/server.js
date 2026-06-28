@@ -75,7 +75,7 @@ async function processLineTextEvent(event) {
     findDriveCaseInfo(config, text, sourceUserId)
   );
   const calendarInfo = await safe("Google Calendar search", () =>
-    findCalendarAvailability(config, caseInfo)
+    findCalendarAvailability(config, caseInfo, text)
   );
   const analysis = analyzeMessage(text, caseInfo);
 

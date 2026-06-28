@@ -2,9 +2,21 @@ import { postJson } from "./http.js";
 
 export async function postApprovalRequest(config, request) {
   if (!config.slack.botToken || !config.slack.channelId) {
+    console.log("[Slack post skipped: missing config]", {
+      requestId: request.id,
+      hasBotToken: Boolean(config.slack.botToken),
+      hasChannelId: Boolean(config.slack.channelId)
+    });
     console.log(formatSlackFallback(request));
     return { ok: true, fallback: true };
   }
+
+  console.log("[Slack post start]", {
+    requestId: request.id,
+    channelId: config.slack.channelId,
+    urgency: request.urgency,
+    presidentRequired: request.presidentRequired
+  });
 
   const response = await postJson(
     "https://slack.com/api/chat.postMessage",
@@ -13,8 +25,18 @@ export async function postApprovalRequest(config, request) {
   );
 
   if (!response.ok) {
+    console.error("[Slack post failed]", {
+      requestId: request.id,
+      error: response.error
+    });
     throw new Error(`Slack post error: ${response.error}`);
   }
+
+  console.log("[Slack post success]", {
+    requestId: request.id,
+    channelId: response.channel,
+    ts: response.ts
+  });
 
   return response;
 }
@@ -53,7 +75,7 @@ export async function openRevisionModal(config, triggerId, request) {
         callback_id: "revision_request",
         private_metadata: request.id,
         title: { type: "plain_text", text: "返信案の修正" },
-        submit: { type: "plain_text", text: "再依頼" },
+        submit: { type: "plain_text", text: "再承認依頼" },
         close: { type: "plain_text", text: "キャンセル" },
         blocks: [
           {
@@ -120,7 +142,7 @@ function buildSlackMessage(config, request) {
       section(
         "*【確認してほしい点】*\n・この返信で送信してよいか\n・金額/日程/対応可否に問題がないか\n・社長確認が必要な内容が含まれていないか"
       ),
-      section(`*承認者:*\n・担当者\n・社長`),
+      section("*承認者:*\n・担当者\n・社長"),
       {
         type: "actions",
         elements: [
@@ -183,16 +205,16 @@ function formatSlackFallback(request) {
 新規/OB：${request.customerType || ""}
 担当者：${request.staffName || ""}
 ステータス：${request.caseStatus || ""}
-緊急度：${request.urgency}
+緊急度：${request.urgency || ""}
 社長確認：${request.presidentRequired ? "必要" : "不要"}
 判断理由：
-${request.reason}
+${request.reason || ""}
 
 【顧客メッセージ】
-「${request.customerMessage}」
+「${request.customerMessage || ""}」
 
 【AI返信案】
-「${request.replyDraft}」
+「${request.replyDraft || ""}」
 
 【確認してほしい点】
 ・この返信で送信してよいか

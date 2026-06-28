@@ -51,6 +51,10 @@ async function handleLineWebhook(req, res) {
 
   const payload = JSON.parse(rawBody.toString("utf8"));
   const events = extractTextEvents(payload);
+  console.log("[LINE webhook received]", {
+    eventCount: payload.events?.length || 0,
+    textEventCount: events.length
+  });
 
   for (const event of events) {
     await processLineTextEvent(event);
@@ -62,6 +66,10 @@ async function handleLineWebhook(req, res) {
 async function processLineTextEvent(event) {
   const text = event.message.text;
   const sourceUserId = event.source?.userId || "";
+  console.log("[LINE text event start]", {
+    lineUserId: maskId(sourceUserId),
+    messageLength: text.length
+  });
 
   const caseInfo = await safe("Google Drive search", () =>
     findDriveCaseInfo(config, text, sourceUserId)
@@ -110,6 +118,11 @@ async function processLineTextEvent(event) {
 
   await saveRequest(request);
   await postApprovalRequest(config, request);
+  console.log("[LINE text event completed]", {
+    requestId: request.id,
+    urgency: request.urgency,
+    presidentRequired: request.presidentRequired
+  });
 }
 
 async function handleSlackAction(req, res) {
@@ -398,4 +411,10 @@ function detectStaffName(caseInfo) {
   const joined = files.map((file) => `${file.name} ${file.textPreview || ""}`).join(" ");
   const match = joined.match(/(?:\u62c5\u5f53\u8005|\u55b6\u696d\u62c5\u5f53|\u62c5\u5f53|\u73fe\u8abf\u62c5\u5f53)\s*[\uff1a:\-\s]\s*([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc]{2,12})/u);
   return match ? match[1] : "";
+}
+
+function maskId(value) {
+  if (!value) return "";
+  if (value.length <= 8) return "****";
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }

@@ -364,7 +364,7 @@ function buildAvailableSlots(events) {
 
     for (const hour of SITE_VISIT_SLOT_HOURS_JST) {
       const start = fromJstParts(base.year, base.month, base.day, hour, 0);
-      const end = new Date(start.getTime() + 90 * 60 * 1000);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
       if (!hasConflict(events, start, end)) {
         slots.push({ start: start.toISOString(), end: end.toISOString() });
         if (slots.length >= 6) break;

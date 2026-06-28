@@ -206,8 +206,10 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
     slots,
     phone,
     hours,
-    slotLine: slots.length ? `現地確認は、直近ですと${slots.join("、")}あたりで調整できる可能性がございます。` : "",
-    staffLine: staffName ? `${staffName}が内容を確認いたします。` : "担当者が内容を確認いたします。",
+    slotLine: slots.length
+      ? `現地確認の候補日です。\n${slots.map((slot) => `・${slot}`).join("\n")}\n上記の中でご都合のよいお時間があればお知らせください。`
+      : "",
+    staffLine: "担当者が内容を確認いたします。",
     caseLine: hasCase ? "過去のやり取りも確認したうえでご案内いたします。" : "必要な情報を確認しながら進めさせていただきます。",
     hoursLine: `受付時間の目安は${hours}です。`
   };
@@ -326,23 +328,32 @@ function buildGeneralReply(ctx) {
 
 function summarizeSiteVisitSlots(calendarInfo) {
   if (!Array.isArray(calendarInfo)) return [];
-  return calendarInfo
+  const labels = calendarInfo
     .filter((calendar) => isSiteVisitStaff(calendar.staffName || calendar.name))
     .flatMap((calendar) =>
-      (calendar.availableSlots || []).slice(0, 2).map((slot) => {
+      (calendar.availableSlots || []).map((slot) => {
         const start = new Date(slot.start);
-        const label = new Intl.DateTimeFormat("ja-JP", {
+        const end = new Date(slot.end || start.getTime() + 60 * 60 * 1000);
+        const dateLabel = new Intl.DateTimeFormat("ja-JP", {
           timeZone: "Asia/Tokyo",
           month: "numeric",
           day: "numeric",
-          weekday: "short",
+          weekday: "short"
+        }).format(start);
+        const startTime = new Intl.DateTimeFormat("ja-JP", {
+          timeZone: "Asia/Tokyo",
           hour: "2-digit",
           minute: "2-digit"
         }).format(start);
-        return `${calendar.staffName || calendar.name} ${label}`;
+        const endTime = new Intl.DateTimeFormat("ja-JP", {
+          timeZone: "Asia/Tokyo",
+          hour: "2-digit",
+          minute: "2-digit"
+        }).format(end);
+        return `${dateLabel} ${startTime}-${endTime}`;
       })
-    )
-    .slice(0, 4);
+    );
+  return [...new Set(labels)].slice(0, 4);
 }
 
 function isSiteVisitStaff(value) {

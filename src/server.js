@@ -98,7 +98,7 @@ async function processLineTextEvent(event) {
     urgency: analysis.urgency,
     presidentRequired: analysis.presidentRequired,
     reason: buildReason(analysis, caseInfo, calendarInfo),
-    replyDraft: buildReplyDraft({ text, analysis, config }),
+    replyDraft: buildReplyDraft({ text, analysis, config, caseInfo, calendarInfo }),
     approvals: {
       staff: null,
       president: null

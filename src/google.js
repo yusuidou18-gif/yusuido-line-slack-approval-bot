@@ -7,6 +7,8 @@ const GOOGLE_DOC_MIME = "application/vnd.google-apps.document";
 const GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet";
 const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const TEXT_MIMES = new Set(["text/plain", "text/csv"]);
+const SITE_VISIT_STAFF_NAMES = ["下村", "下村奈生", "菅野", "菅野香織"];
+const SITE_VISIT_SLOT_HOURS_JST = [10, 13, 15, 17];
 
 let cachedToken = null;
 
@@ -337,12 +339,17 @@ function normalizeCalendarConfigs(calendarIds, staffName) {
   const normalized = calendarIds.map((calendar) =>
     typeof calendar === "string" ? { id: calendar } : calendar
   );
+  const siteVisitCalendars = normalized.filter((calendar) => {
+    const names = calendar.staffNames || [calendar.staffName, calendar.name].filter(Boolean);
+    return names.some((name) => isSiteVisitStaffName(name));
+  });
+  const baseCalendars = siteVisitCalendars.length ? siteVisitCalendars : normalized;
   const filtered = staffName
-    ? normalized.filter((calendar) => {
+    ? baseCalendars.filter((calendar) => {
         const names = calendar.staffNames || [calendar.staffName, calendar.name].filter(Boolean);
-        return !names.length || names.includes(staffName);
+        return !names.length || names.includes(staffName) || names.some((name) => isSiteVisitStaffName(name));
       })
-    : normalized;
+    : baseCalendars;
 
   return (filtered.length ? filtered : normalized).filter((calendar) => calendar.id);
 }
@@ -350,15 +357,13 @@ function normalizeCalendarConfigs(calendarIds, staffName) {
 function buildAvailableSlots(events) {
   const slots = [];
   const now = new Date();
-  const slotHours = [9, 13, 15];
 
   for (let dayOffset = 1; dayOffset <= 14 && slots.length < 6; dayOffset += 1) {
-    const day = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-    if (day.getDay() === 0) continue;
+    const base = toJstParts(new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000));
+    if (base.weekday === 0 || base.weekday === 1) continue;
 
-    for (const hour of slotHours) {
-      const start = new Date(day);
-      start.setHours(hour, 0, 0, 0);
+    for (const hour of SITE_VISIT_SLOT_HOURS_JST) {
+      const start = fromJstParts(base.year, base.month, base.day, hour, 0);
       const end = new Date(start.getTime() + 90 * 60 * 1000);
       if (!hasConflict(events, start, end)) {
         slots.push({ start: start.toISOString(), end: end.toISOString() });
@@ -368,6 +373,33 @@ function buildAvailableSlots(events) {
   }
 
   return slots;
+}
+
+function isSiteVisitStaffName(value) {
+  const text = String(value || "").normalize("NFKC");
+  return SITE_VISIT_STAFF_NAMES.some((name) => text.includes(name));
+}
+
+function toJstParts(date) {
+  const parts = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    weekday: "short"
+  }).formatToParts(date);
+  const value = (type) => parts.find((part) => part.type === type)?.value || "";
+  const weekdayText = value("weekday");
+  return {
+    year: Number(value("year")),
+    month: Number(value("month")),
+    day: Number(value("day")),
+    weekday: ["日", "月", "火", "水", "木", "金", "土"].indexOf(weekdayText)
+  };
+}
+
+function fromJstParts(year, month, day, hour, minute) {
+  return new Date(Date.UTC(year, month - 1, day, hour - 9, minute, 0, 0));
 }
 
 function hasConflict(events, slotStart, slotEnd) {

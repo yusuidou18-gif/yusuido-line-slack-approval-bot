@@ -44,16 +44,22 @@ export async function postApprovalRequest(config, request) {
 export async function updateSlackMessage(config, payload, text) {
   if (!config.slack.botToken || !payload.channel?.id || !payload.message?.ts) return;
 
+  const originalBlocks = Array.isArray(payload.message.blocks) ? payload.message.blocks : [];
+  const preservedBlocks = originalBlocks.filter((block) => block.block_id !== "approval_status");
+  const statusText = `*ステータス更新*\n${text}\n元の承認依頼本文は記録として残しています。`;
+
   const response = await postJson(
     "https://slack.com/api/chat.update",
     {
       channel: payload.channel.id,
       ts: payload.message.ts,
-      text,
+      text: `${payload.message.text || "公式LINE返信案"}\n${text}`,
       blocks: [
+        ...preservedBlocks,
         {
-          type: "section",
-          text: { type: "mrkdwn", text }
+          type: "context",
+          block_id: "approval_status",
+          elements: [{ type: "mrkdwn", text: statusText }]
         }
       ]
     },
@@ -137,7 +143,7 @@ function buildSlackMessage(config, request) {
         ]
       },
       section(`*判断理由:*\n${request.reason}`),
-      section(`*【顧客メッセージ】*\n>${request.customerMessage.replace(/\n/g, "\n>")}`),
+      section(`*【顧客メッセージ】*\n>${escapeMrkdwn(request.customerMessage).replace(/\n/g, "\n>")}`),
       section(`*【AI返信案】*\n${request.replyDraft}`),
       section(
         "*【確認してほしい点】*\n・この返信で送信してよいか\n・金額/日程/対応可否に問題がないか\n・社長確認が必要な内容が含まれていないか"
@@ -207,8 +213,7 @@ function formatSlackFallback(request) {
 ステータス：${request.caseStatus || ""}
 緊急度：${request.urgency || ""}
 社長確認：${request.presidentRequired ? "必要" : "不要"}
-判断理由：
-${request.reason || ""}
+判断理由：${request.reason || ""}
 
 【顧客メッセージ】
 「${request.customerMessage || ""}」
@@ -229,4 +234,8 @@ ${request.reason || ""}
 ［承認］［修正依頼］［却下］
 
 ――――――――――`;
+}
+
+function escapeMrkdwn(value) {
+  return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "check": "node scripts/check-syntax.js",
+    "test": "node scripts/regression-tests.js",
     "validate:env": "node scripts/validate-env.js",
     "smoke": "node scripts/smoke-test.js"
   },

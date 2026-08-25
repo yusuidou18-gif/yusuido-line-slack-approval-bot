@@ -6,7 +6,7 @@ services:
     buildCommand: ""
     startCommand: node src/server.js
     healthCheckPath: /health
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: 24

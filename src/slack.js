@@ -115,9 +115,10 @@ export async function openRevisionModal(config, triggerId, request) {
   if (!response.ok) throw new Error(`Slack modal error: ${response.error}`);
 }
 
-function buildSlackMessage(config, request) {
+export function buildSlackMessage(config, request) {
   const text = formatSlackFallback(request);
   const mentions = buildMentions(config, request);
+  const approverLines = buildApproverLines(request);
 
   return {
     channel: config.slack.channelId,
@@ -148,12 +149,12 @@ function buildSlackMessage(config, request) {
       section(
         "*【確認してほしい点】*\n・この返信で送信してよいか\n・金額/日程/対応可否に問題がないか\n・社長確認が必要な内容が含まれていないか"
       ),
-      section("*承認者:*\n・担当者\n・社長"),
+      section(`*承認者:*\n${approverLines}`),
       {
         type: "actions",
         elements: [
-          button("承認", "approve", request, "primary"),
-          button("修正依頼", "revise", request),
+          button("この本文をLINE送信", "approve", request, "primary"),
+          button("編集して再承認", "revise", request),
           button("却下", "reject", request, "danger")
         ]
       }
@@ -164,12 +165,20 @@ function buildSlackMessage(config, request) {
 function buildMentions(config, request) {
   const ids = new Set();
   if (request.staffSlackUserId) ids.add(request.staffSlackUserId);
-  if (config.slack.presidentUserId) ids.add(config.slack.presidentUserId);
+  if (request.presidentRequired && config.slack.presidentUserId) {
+    ids.add(config.slack.presidentUserId);
+  }
   if (!request.staffSlackUserId && config.slack.officeUserId) ids.add(config.slack.officeUserId);
   if (!request.staffSlackUserId) {
     for (const id of config.slack.officeUserIds || []) ids.add(id);
   }
   return [...ids].map((id) => `<@${id}>`).join(" ");
+}
+
+function buildApproverLines(request) {
+  const lines = ["・担当者"];
+  if (request.presidentRequired) lines.push("・社長");
+  return lines.join("\n");
 }
 
 function field(label, value) {
@@ -198,10 +207,15 @@ function button(text, action, request, style) {
 
 function buildActionValue(request) {
   if (typeof request === "string") return request;
-  return JSON.stringify({ id: request.id, u: request.lineUserId });
+  return JSON.stringify({
+    id: request.id,
+    draftId: request.draft?.id || request.id,
+    version: request.draft?.version || 1
+  });
 }
 
 function formatSlackFallback(request) {
+  const approverLines = buildApproverLines(request);
   return `――――――――――
 
 【公式LINE返信案｜承認依頼】
@@ -227,11 +241,10 @@ function formatSlackFallback(request) {
 ・社長確認が必要な内容が含まれていないか
 
 承認者：
-・担当者
-・社長
+${approverLines}
 
 アクション：
-［承認］［修正依頼］［却下］
+［この本文をLINE送信］［編集して再承認］［却下］
 
 ――――――――――`;
 }

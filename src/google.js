@@ -357,9 +357,8 @@ function normalizeCalendarConfigs(calendarIds, staffName) {
   return (filtered.length ? filtered : normalized).filter((calendar) => calendar.id);
 }
 
-function buildAvailableSlots(events, preference = emptySchedulePreference()) {
+function buildAvailableSlots(events, preference = emptySchedulePreference(), now = new Date()) {
   const slots = [];
-  const now = new Date();
   const maxDays = preference.explicitDates.length ? 60 : 21;
   const slotHours = preference.hours.length ? preference.hours : SITE_VISIT_SLOT_HOURS_JST;
 
@@ -369,10 +368,16 @@ function buildAvailableSlots(events, preference = emptySchedulePreference()) {
     if (!matchesSchedulePreference(base, preference)) continue;
 
     for (const hour of slotHours) {
+      const startMinutes = hour * 60;
+      if (!matchesTimePreference(startMinutes, preference)) continue;
       const start = fromJstParts(base.year, base.month, base.day, hour, 0);
       const end = new Date(start.getTime() + 60 * 60 * 1000);
       if (!hasConflict(events, start, end)) {
-        slots.push({ start: start.toISOString(), end: end.toISOString() });
+        slots.push({
+          start: start.toISOString(),
+          end: end.toISOString(),
+          slotMinutes: startMinutes
+        });
         if (slots.length >= 6) break;
       }
     }
@@ -386,13 +391,13 @@ function parseSchedulePreference(text, now = new Date()) {
   const preference = emptySchedulePreference();
 
   const weekdayMap = [
-    ["日", 0, /日曜|日曜日|日\b/],
-    ["月", 1, /月曜|月曜日|月\b/],
-    ["火", 2, /火曜|火曜日|火\b/],
-    ["水", 3, /水曜|水曜日|水\b/],
-    ["木", 4, /木曜|木曜日|木\b/],
-    ["金", 5, /金曜|金曜日|金\b/],
-    ["土", 6, /土曜|土曜日|土\b/]
+    ["日", 0, /日曜|日曜日/],
+    ["月", 1, /月曜|月曜日/],
+    ["火", 2, /火曜|火曜日/],
+    ["水", 3, /水曜|水曜日/],
+    ["木", 4, /木曜|木曜日/],
+    ["金", 5, /金曜|金曜日/],
+    ["土", 6, /土曜|土曜日/]
   ];
 
   if (/土日|週末/.test(normalized)) {
@@ -416,6 +421,15 @@ function parseSchedulePreference(text, now = new Date()) {
     preference.explicitDates.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
   }
 
+  if (!preference.explicitDates.length) {
+    const dayOnlyMatch = normalized.match(/(?:^|[^\d])(\d{1,2})日/);
+    if (dayOnlyMatch) {
+      const day = Number(dayOnlyMatch[1]);
+      const target = resolveDayOnlyDate(day, preference.weekdays, now);
+      if (target) preference.explicitDates.push(formatJstDateKey(target));
+    }
+  }
+
   if (/明日/.test(normalized)) {
     const target = toJstParts(new Date(now.getTime() + 24 * 60 * 60 * 1000));
     preference.explicitDates.push(formatJstDateKey(target));
@@ -425,13 +439,25 @@ function parseSchedulePreference(text, now = new Date()) {
     preference.explicitDates.push(formatJstDateKey(target));
   }
 
+  const afterMatch = normalized.match(/([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*分?\s*(?:以降|から|後|あと)/);
+  if (afterMatch) {
+    preference.availableAfterMinutes = Number(afterMatch[1]) * 60 + Number(afterMatch[2] || 0);
+  }
+
+  const exactMatch = normalized.match(/([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*分?\s*(?:で|に|なら|希望|お願いします|大丈夫)/);
+  if (exactMatch && !preference.availableAfterMinutes) {
+    preference.exactMinutes = Number(exactMatch[1]) * 60 + Number(exactMatch[2] || 0);
+  }
+
   if (/午前|朝|10時|10:00/.test(normalized)) preference.hours.push(10);
   if (/午後|昼|13時|13:00/.test(normalized)) preference.hours.push(13, 15, 17);
   if (/15時|15:00/.test(normalized)) preference.hours.push(15);
   if (/夕方|17時|17:00/.test(normalized)) preference.hours.push(17);
   const timePattern = /([01]?\d|2[0-3])(?::[0-5]\d|時)/g;
   for (const match of normalized.matchAll(timePattern)) {
-    preference.hours.push(...nearestSiteVisitSlotHours(Number(match[1])));
+    if (!preference.availableAfterMinutes && preference.exactMinutes == null) {
+      preference.hours.push(...nearestSiteVisitSlotHours(Number(match[1])));
+    }
   }
 
   preference.weekdays = [...new Set(preference.weekdays)];
@@ -444,7 +470,13 @@ function parseSchedulePreference(text, now = new Date()) {
 }
 
 function emptySchedulePreference() {
-  return { weekdays: [], explicitDates: [], hours: [] };
+  return {
+    weekdays: [],
+    explicitDates: [],
+    hours: [],
+    availableAfterMinutes: null,
+    exactMinutes: null
+  };
 }
 
 function matchesSchedulePreference(day, preference) {
@@ -453,6 +485,31 @@ function matchesSchedulePreference(day, preference) {
   if (hasExplicitDates && !preference.explicitDates.includes(formatJstDateKey(day))) return false;
   if (!hasExplicitDates && hasWeekdays && !preference.weekdays.includes(day.weekday)) return false;
   return true;
+}
+
+function matchesTimePreference(startMinutes, preference) {
+  if (preference.availableAfterMinutes != null && startMinutes < preference.availableAfterMinutes) {
+    return false;
+  }
+  if (preference.exactMinutes != null) {
+    const nearest = nearestSiteVisitSlotHours(Math.floor(preference.exactMinutes / 60));
+    return nearest.includes(startMinutes / 60);
+  }
+  return true;
+}
+
+function resolveDayOnlyDate(day, weekdays, now) {
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  const current = toJstParts(now);
+  for (let offset = 0; offset <= 60; offset += 1) {
+    const target = toJstParts(new Date(now.getTime() + offset * 24 * 60 * 60 * 1000));
+    if (target.day !== day) continue;
+    if (isPastJstDate(target.year, target.month, target.day, current)) continue;
+    if (weekdays.length && !weekdays.includes(target.weekday)) continue;
+    if (!isValidMonthDay(target.month, target.day)) continue;
+    return target;
+  }
+  return null;
 }
 
 function formatJstDateKey(day) {
@@ -521,3 +578,9 @@ function hasConflict(events, slotStart, slotEnd) {
     return eventStart < slotEnd && eventEnd > slotStart;
   });
 }
+
+export const __googleTest = {
+  buildAvailableSlots,
+  emptySchedulePreference,
+  parseSchedulePreference
+};

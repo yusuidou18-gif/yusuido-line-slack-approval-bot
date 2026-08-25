@@ -43,3 +43,35 @@ export async function updateRequest(id, updater) {
   await writeRequests(requests);
   return requests[id];
 }
+
+export async function invalidatePendingRequestsForLineUser(lineUserId, reason) {
+  if (!lineUserId) return 0;
+  const requests = await readRequests();
+  const now = new Date().toISOString();
+  let count = 0;
+
+  for (const request of Object.values(requests)) {
+    if (request.lineUserId !== lineUserId) continue;
+    if (!["pending", "revision_requested", "approved_ready_to_send"].includes(request.status)) {
+      continue;
+    }
+    request.status = "stale";
+    request.draft = {
+      ...(request.draft || {}),
+      status: "stale",
+      staleReason: reason || "新しいLINEメッセージを受信"
+    };
+    request.history = [
+      ...(request.history || []),
+      {
+        at: now,
+        type: "draft_stale",
+        note: reason || "新しいLINEメッセージを受信したため旧返信案を無効化"
+      }
+    ];
+    count += 1;
+  }
+
+  if (count) await writeRequests(requests);
+  return count;
+}

@@ -7,7 +7,12 @@ import { findCalendarAvailability, findDriveCaseInfo } from "./google.js";
 import { analyzeMessage, buildReplyDraft } from "./rules.js";
 import { pushLineMessage, extractTextEvents } from "./line.js";
 import { openRevisionModal, postApprovalRequest, updateSlackMessage } from "./slack.js";
-import { getRequest, saveRequest, updateRequest } from "./storage.js";
+import {
+  getRequest,
+  invalidatePendingRequestsForLineUser,
+  saveRequest,
+  updateRequest
+} from "./storage.js";
 
 const config = getConfig();
 
@@ -66,8 +71,11 @@ async function handleLineWebhook(req, res) {
 async function processLineTextEvent(event) {
   const text = event.message.text;
   const sourceUserId = event.source?.userId || "";
+  const draftId = createId("draft");
+  const now = new Date();
   console.log("[LINE text event start]", {
     lineUserId: maskId(sourceUserId),
+    lineMessageId: event.message?.id || "",
     messageLength: text.length
   });
 
@@ -82,10 +90,16 @@ async function processLineTextEvent(event) {
   const staffName = detectStaffName(caseInfo);
   const staffSlackUserId = staffName ? config.slack.staffUserIds[staffName] : "";
   const driveCase = caseInfo?.case || {};
+  const replyDraft = buildReplyDraft({ text, analysis, config, caseInfo, calendarInfo });
+  await invalidatePendingRequestsForLineUser(
+    sourceUserId,
+    "新しいLINEメッセージを受信したため旧返信案を無効化"
+  );
   const request = {
     id: createId("approval"),
-    createdAt: new Date().toISOString(),
+    createdAt: now.toISOString(),
     status: "pending",
+    lineMessageId: event.message?.id || "",
     lineUserId: sourceUserId,
     replyToken: event.replyToken,
     customerMessage: text,
@@ -98,7 +112,14 @@ async function processLineTextEvent(event) {
     urgency: analysis.urgency,
     presidentRequired: analysis.presidentRequired,
     reason: buildReason(analysis, caseInfo, calendarInfo),
-    replyDraft: buildReplyDraft({ text, analysis, config, caseInfo, calendarInfo }),
+    replyDraft,
+    draft: {
+      id: draftId,
+      version: 1,
+      status: "pending",
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    },
     approvals: {
       staff: null,
       president: null
@@ -174,20 +195,16 @@ async function handleSlackAction(req, res) {
     return sendText(res, 200, "修正内容を入力してください。");
   }
 
-  let updated = await updateRequest(requestId, (request) =>
-    applySlackAction(request, actionId, userId)
-  );
-
-  if (!updated && actionId === "approve" && actionValue.lineUserId) {
-    const fallback = buildFallbackRequestFromSlackPayload(requestId, actionValue.lineUserId, payload);
-    if (!fallback.replyDraft) {
-      return sendText(res, 404, "Request not found and reply draft could not be restored");
-    }
-    await saveRequest(fallback);
-    updated = await updateRequest(requestId, (request) =>
-      applySlackAction(request, actionId, userId)
-    );
+  const currentBeforeAction = await getRequest(requestId);
+  if (!currentBeforeAction) return sendText(res, 404, "Request not found");
+  if (!isCurrentDraftAction(currentBeforeAction, actionValue)) {
+    await updateSlackMessage(config, payload, `無効な古い承認ボタンです: ${requestId}`);
+    return sendText(res, 409, "この承認依頼は古い下書きのため送信しません。最新のSlack通知から承認してください。");
   }
+
+  const updated = await updateRequest(requestId, (request) =>
+    applySlackAction(request, actionId, userId, actionValue)
+  );
 
   if (!updated) return sendText(res, 404, "Request not found");
 
@@ -197,17 +214,28 @@ async function handleSlackAction(req, res) {
       ...request,
       status: "sent",
       sentAt: new Date().toISOString(),
+      draft: { ...(request.draft || {}), status: "sent" },
       history: [
         ...request.history,
         {
           at: new Date().toISOString(),
           type: "line_sent",
-          note: "担当者と社長の承認後に公式LINEへ送信"
+          note: "承認後に公式LINEへ送信"
         }
       ]
     }));
     await updateSlackMessage(config, payload, `送信完了: ${requestId}`);
     return sendText(res, 200, "承認が揃ったためLINEへ送信しました。");
+  }
+
+  if (updated.status === "sent") {
+    await updateSlackMessage(config, payload, `送信済みです。同じ承認では再送しません: ${requestId}`);
+    return sendText(res, 200, "この返信案は送信済みです。再送は行いません。");
+  }
+
+  if (updated.status === "stale") {
+    await updateSlackMessage(config, payload, `無効な古い承認依頼です。最新の通知を確認してください: ${requestId}`);
+    return sendText(res, 409, "この承認依頼は古いため送信しません。");
   }
 
   if (updated.status === "rejected") {
@@ -238,6 +266,14 @@ async function handleRevisionSubmission(payload, res) {
     ...request,
     status: "pending",
     replyDraft,
+    draft: {
+      ...(request.draft || {}),
+      id: createId("draft"),
+      version: (request.draft?.version || 1) + 1,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    },
     approvals: { staff: null, president: null },
     reason: reasonText ? `${request.reason}。修正理由: ${reasonText}` : request.reason,
     history: [
@@ -255,9 +291,22 @@ async function handleRevisionSubmission(payload, res) {
   return sendJson(res, 200, { response_action: "clear" });
 }
 
-function applySlackAction(request, actionId, userId) {
+function applySlackAction(request, actionId, userId, actionValue = {}) {
   const now = new Date().toISOString();
   const historyItem = { at: now, type: actionId, userId };
+
+  if (["stale", "sent", "rejected"].includes(request.status)) {
+    return {
+      ...request,
+      history: [
+        ...request.history,
+        {
+          ...historyItem,
+          note: `現在のステータスが${request.status}のため送信しません`
+        }
+      ]
+    };
+  }
 
   if (actionId === "reject") {
     return {
@@ -268,6 +317,18 @@ function applySlackAction(request, actionId, userId) {
   }
 
   if (actionId !== "approve") return request;
+
+  if (!isCurrentDraftAction(request, actionValue)) {
+    return {
+      ...request,
+      status: "stale",
+      draft: { ...(request.draft || {}), status: "stale" },
+      history: [
+        ...request.history,
+        { ...historyItem, note: "古い下書きへの承認のため送信しません" }
+      ]
+    };
+  }
 
   const isPresident = userId && userId === config.slack.presidentUserId;
   const officeUserIds = new Set([
@@ -285,7 +346,9 @@ function applySlackAction(request, actionId, userId) {
   if (isPresident) approvals.president = { userId, at: now };
   if (isStaff) approvals.staff = { userId, at: now };
 
-  const ready = Boolean(approvals.staff || approvals.president);
+  const ready = request.presidentRequired
+    ? Boolean(approvals.president)
+    : Boolean(approvals.staff || approvals.president);
   return {
     ...request,
     approvals,
@@ -294,46 +357,33 @@ function applySlackAction(request, actionId, userId) {
       ...request.history,
       {
         ...historyItem,
-        note: ready ? "担当者と社長の承認が完了" : "承認を記録"
+        note: ready ? "必要な承認が完了" : "承認を記録"
       }
     ]
   };
 }
 
 function parseActionValue(value) {
-  if (!value) return { id: "", lineUserId: "" };
+  if (!value) return { id: "", draftId: "", version: 0 };
   try {
     const parsed = JSON.parse(value);
     return {
       id: parsed.id || "",
-      lineUserId: parsed.u || ""
+      draftId: parsed.draftId || parsed.draft_id || "",
+      version: Number(parsed.version || 0)
     };
   } catch {
-    return { id: value, lineUserId: "" };
+    return { id: value, draftId: "", version: 0 };
   }
 }
 
-function buildFallbackRequestFromSlackPayload(requestId, lineUserId, payload) {
-  const now = new Date().toISOString();
-  return {
-    id: requestId,
-    createdAt: now,
-    status: "pending",
-    lineUserId,
-    customerMessage: extractSlackBlockText(payload, 3),
-    replyDraft: extractSlackBlockText(payload, 4),
-    approvals: {
-      staff: null,
-      president: null
-    },
-    history: [
-      {
-        at: now,
-        type: "restored_from_slack",
-        note: "Restored minimum request data from Slack action payload"
-      }
-    ]
-  };
+function isCurrentDraftAction(request, actionValue) {
+  if (!request?.draft) return true;
+  if (request.draft.status === "stale") return false;
+  if (request.draft.expiresAt && new Date(request.draft.expiresAt) <= new Date()) return false;
+  if (actionValue.draftId && actionValue.draftId !== request.draft.id) return false;
+  if (actionValue.version && actionValue.version !== request.draft.version) return false;
+  return true;
 }
 
 function extractSlackBlockText(payload, index) {

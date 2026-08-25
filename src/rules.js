@@ -120,6 +120,7 @@ export function analyzeMessage(text, caseInfo) {
   const legalHit = findHit(normalized, LEGAL_REPUTATION_KEYWORDS);
   const siteVisitHit = findHit(normalized, SITE_VISIT_KEYWORDS);
   const scheduleHit = findHit(normalized, SCHEDULE_KEYWORDS);
+  const hasScheduleExpression = hasDateOrTimeExpression(normalized);
   const obHit = findHit(normalized, OB_KEYWORDS);
 
   const hasComplaintHistory = /あり|有|クレーム|トラブル|苦情/.test(complaintHistory);
@@ -130,7 +131,7 @@ export function analyzeMessage(text, caseInfo) {
 
   const riskHit = complaintHit || moneyHit || legalHit || hasComplaintHistory;
   const needsSiteVisit = Boolean(siteVisitHit || /写真|寸法|サイズ|場所|症状/.test(normalized));
-  const urgency = emergencyHit || complaintHit || legalHit ? "高" : needsSiteVisit || scheduleHit || moneyHit ? "中" : "低";
+  const urgency = emergencyHit || complaintHit || legalHit ? "高" : needsSiteVisit || scheduleHit || hasScheduleExpression || moneyHit ? "中" : "低";
   const presidentRequired = Boolean(emergencyHit || riskHit);
   const templateKey = chooseTemplateKey({
     emergencyHit,
@@ -138,7 +139,7 @@ export function analyzeMessage(text, caseInfo) {
     moneyHit,
     legalHit,
     siteVisitHit,
-    scheduleHit,
+    scheduleHit: scheduleHit || (hasScheduleExpression ? "日時希望" : ""),
     isOb
   });
 
@@ -149,6 +150,7 @@ export function analyzeMessage(text, caseInfo) {
   if (legalHit) reasons.push(`「${legalHit}」を含むため法的・口コミリスクの可能性あり`);
   if (siteVisitHit) reasons.push(`「${siteVisitHit}」を含むため現地確認へ自然に誘導`);
   if (scheduleHit) reasons.push(`「${scheduleHit}」を含むため日程確認が必要`);
+  if (!scheduleHit && hasScheduleExpression) reasons.push("日時希望の表現を含むため日程確認が必要");
   if (hasComplaintHistory) reasons.push("Google Drive上にクレーム・トラブル履歴の可能性あり");
   if (isOb) reasons.push("OB顧客の可能性があるため優先対応");
   if (caseInfo?.matchedFiles?.length) reasons.push("Google Driveに候補案件情報あり");
@@ -209,13 +211,34 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
     phone,
     hours,
     slotLine: slots.length
-      ? `現地確認の候補日です。\n${slots.map((slot) => `・${slot}`).join("\n")}\n上記の中でご都合のよいお時間があればお知らせください。`
+      ? buildSlotLine(slots, schedulePreference)
       : "",
     staffLine: "担当者が内容を確認いたします。",
     caseLine: hasCase ? "過去のやり取りも確認したうえでご案内いたします。" : "必要な情報を確認しながら進めさせていただきます。",
     noSlotLine: buildNoSlotLine(schedulePreference),
     hoursLine: `受付時間の目安は${hours}です。`
   };
+}
+
+function buildSlotLine(slots, preference) {
+  const condition = formatSchedulePreference(preference);
+  if (slots.length === 1 && condition) {
+    return [
+      `${condition}とのこと、承知しました。`,
+      "現地確認は下記のお時間でご案内できそうです。",
+      `・${slots[0]}`,
+      "こちらのお時間でよろしいでしょうか？"
+    ].join("\n");
+  }
+
+  const lead = condition
+    ? `${condition}の条件に近い現地確認の候補日です。`
+    : "現地確認の候補日です。";
+  return [
+    lead,
+    ...slots.map((slot) => `・${slot}`),
+    "上記の中でご都合のよいお時間があればお知らせください。"
+  ].join("\n");
 }
 
 function buildEmergencyReply(ctx) {
@@ -294,7 +317,9 @@ function buildScheduleReply(ctx) {
     lines.push("営業時間は10:00-19:00、定休日は日曜・月曜です。候補日を確認してご案内いたします。");
   }
 
-  lines.push("", "ご希望の曜日や時間帯がございましたら、お知らせください。");
+  if (!ctx.slotLine) {
+    lines.push("", "ご希望の曜日や時間帯がございましたら、お知らせください。");
+  }
   return lines;
 }
 
@@ -364,18 +389,25 @@ function summarizeSiteVisitSlots(calendarInfo) {
 }
 
 function summarizeSchedulePreference(calendarInfo) {
-  if (!Array.isArray(calendarInfo)) return { weekdays: [], explicitDates: [], hours: [] };
+  if (!Array.isArray(calendarInfo)) return emptySchedulePreference();
   const preference = calendarInfo.find((calendar) => calendar.preference)?.preference || {};
   return {
     weekdays: Array.isArray(preference.weekdays) ? preference.weekdays : [],
     explicitDates: Array.isArray(preference.explicitDates) ? preference.explicitDates : [],
-    hours: Array.isArray(preference.hours) ? preference.hours : []
+    hours: Array.isArray(preference.hours) ? preference.hours : [],
+    availableAfterMinutes:
+      Number.isFinite(preference.availableAfterMinutes) ? preference.availableAfterMinutes : null,
+    exactMinutes: Number.isFinite(preference.exactMinutes) ? preference.exactMinutes : null
   };
 }
 
 function buildNoSlotLine(preference) {
   const hasPreference =
-    preference.weekdays.length || preference.explicitDates.length || preference.hours.length;
+    preference.weekdays.length ||
+    preference.explicitDates.length ||
+    preference.hours.length ||
+    preference.availableAfterMinutes != null ||
+    preference.exactMinutes != null;
   if (!hasPreference) return "";
 
   const closedOnly =
@@ -387,6 +419,49 @@ function buildNoSlotLine(preference) {
   }
 
   return "ご希望に近い日程を確認いたしましたが、現時点で自動候補が見つかりませんでした。空き状況を確認して、あらためて候補日をご案内いたします。";
+}
+
+function emptySchedulePreference() {
+  return {
+    weekdays: [],
+    explicitDates: [],
+    hours: [],
+    availableAfterMinutes: null,
+    exactMinutes: null
+  };
+}
+
+function formatSchedulePreference(preference) {
+  const parts = [];
+  if (preference.explicitDates.length === 1) {
+    parts.push(formatDateKeyForCustomer(preference.explicitDates[0]));
+  } else if (preference.weekdays.length) {
+    parts.push(preference.weekdays.map((day) => "日月火水木金土"[day]).filter(Boolean).join("・") + "曜日");
+  }
+
+  if (preference.availableAfterMinutes != null) {
+    parts.push(`${formatMinutes(preference.availableAfterMinutes)}以降`);
+  } else if (preference.exactMinutes != null) {
+    parts.push(`${formatMinutes(preference.exactMinutes)}ごろ`);
+  } else if (preference.hours.length === 1) {
+    parts.push(`${String(preference.hours[0]).padStart(2, "0")}:00ごろ`);
+  }
+
+  return parts.join(" ");
+}
+
+function formatDateKeyForCustomer(dateKey) {
+  const [year, month, day] = String(dateKey || "").split("-").map(Number);
+  if (!year || !month || !day) return "";
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const weekday = "日月火水木金土"[date.getUTCDay()];
+  return `${month}月${day}日（${weekday}）`;
+}
+
+function formatMinutes(minutes) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function isClosedDateKey(dateKey) {
@@ -435,4 +510,14 @@ function findHit(text, keywords) {
 
 function normalizeText(value) {
   return String(value || "").normalize("NFKC");
+}
+
+function hasDateOrTimeExpression(text) {
+  return (
+    /\d{1,2}[月\/.-]\d{1,2}日?/.test(text) ||
+    /\d{1,2}日/.test(text) ||
+    /(?:日曜|月曜|火曜|水曜|木曜|金曜|土曜|日曜日|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日|平日|土日|週末)/.test(text) ||
+    /(?:[01]?\d|2[0-3])(?::[0-5]\d|時)/.test(text) ||
+    /(?:午前|午後|夕方|朝|昼|以降|から)/.test(text)
+  );
 }

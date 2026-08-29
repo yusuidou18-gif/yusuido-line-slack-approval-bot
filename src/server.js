@@ -2,7 +2,7 @@ import http from "node:http";
 import { URLSearchParams } from "node:url";
 import { getConfig } from "./config.js";
 import { readRawBody, sendJson, sendText } from "./http.js";
-import { verifyLineSignature, verifySlackSignature, createId } from "./security.js";
+import { verifyLineSignature, verifySlackSignature, createId, createUuid } from "./security.js";
 import { findCalendarAvailability, findDriveCaseInfo, verifyCalendarSlotAvailable } from "./google.js";
 import { analyzeMessage, buildReplyDraft } from "./rules.js";
 import { pushLineMessage, extractTextEvents } from "./line.js";
@@ -231,7 +231,7 @@ async function processLineTextEvent(event) {
       validationErrors: generationErrors
     },
     sendBlockedReason: draftOk ? "" : generationErrors.join(" / "),
-    sendRetryKey: createId("line_retry"),
+    sendRetryKey: createUuid(),
     llm: {
       used: Boolean(llmResult.ok),
       skipped: Boolean(llmResult.skipped),

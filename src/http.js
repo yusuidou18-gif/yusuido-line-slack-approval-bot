@@ -40,7 +40,14 @@ export async function postJson(url, body, headers = {}) {
   }
 
   if (!response.ok) {
-    const detail = data?.error || data?.raw || response.statusText;
+    const detail =
+      data?.message ||
+      data?.error ||
+      (Array.isArray(data?.details) && data.details.length
+        ? JSON.stringify(data.details)
+        : "") ||
+      data?.raw ||
+      response.statusText;
     throw new Error(`HTTP ${response.status} ${url}: ${detail}`);
   }
 

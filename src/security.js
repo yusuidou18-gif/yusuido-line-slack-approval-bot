@@ -33,3 +33,7 @@ export function timingSafeEqual(left, right) {
 export function createId(prefix = "req") {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString("hex")}`;
 }
+
+export function createUuid() {
+  return crypto.randomUUID();
+}

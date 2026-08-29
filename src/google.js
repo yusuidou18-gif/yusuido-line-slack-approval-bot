@@ -106,6 +106,8 @@ export async function findDriveCaseInfo(config, messageText, sourceUserId) {
 
   const terms = extractSearchTerms(messageText);
   if (sourceUserId) terms.push(sourceUserId);
+  const sheetMatch = await findCaseInManagementSheet(config, messageText, sourceUserId, terms);
+  if (sheetMatch) return sheetMatch;
   if (!terms.length) return null;
 
   const queryText = terms
@@ -151,6 +153,62 @@ export async function findDriveCaseInfo(config, messageText, sourceUserId) {
   };
 }
 
+async function findCaseInManagementSheet(config, messageText, sourceUserId, terms) {
+  const sheetName = config.google.caseSheetName || "湧水堂_案件管理";
+  const folderIds = await listDriveFolderIds(config, config.google.driveFolderId);
+  const folderFilter = folderIds
+    .map((folderId) => `'${escapeQuery(folderId)}' in parents`)
+    .join(" or ");
+  const q = `name = '${escapeQuery(sheetName)}' and (${folderFilter}) and trashed = false`;
+  const params = new URLSearchParams({
+    q,
+    fields: "files(id,name,mimeType,webViewLink,modifiedTime)",
+    pageSize: "3",
+    supportsAllDrives: "true",
+    includeItemsFromAllDrives: "true"
+  });
+  const data = await googleGet(
+    config,
+    `https://www.googleapis.com/drive/v3/files?${params}`
+  );
+  const file = data?.files?.find((item) => item.mimeType === GOOGLE_SHEET_MIME) || data?.files?.[0];
+  if (!file) return null;
+
+  const csv = await readDriveFileText(config, file);
+  const rows = parseCsv(csv);
+  if (rows.length < 2) return null;
+  const headers = rows[0].map(normalizeHeader);
+  const records = rows.slice(1).map((row, index) => ({
+    index: index + 2,
+    raw: row,
+    record: Object.fromEntries(headers.map((header, columnIndex) => [header, row[columnIndex] || ""]))
+  }));
+  const candidates = records
+    .map((entry) => ({
+      ...entry,
+      score: scoreCaseRecord(entry.record, messageText, sourceUserId, terms)
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (!candidates.length) return null;
+  const best = candidates[0];
+  const caseFields = extractCaseFieldsFromRecord(best.record);
+  return {
+    matchedFiles: [
+      {
+        ...file,
+        sheetRow: best.index,
+        textPreview: best.raw.join(" "),
+        extracted: caseFields
+      }
+    ],
+    case: caseFields,
+    matchConfidence: best.score >= 5 ? "high" : best.score >= 3 ? "medium" : "low",
+    note: buildDriveNote([{ ...file, name: `${file.name} ${best.index}行目` }], caseFields)
+  };
+}
+
 export async function findCalendarAvailability(config, caseInfo, messageText = "") {
   if (!config.google.calendarIds.length) return [];
 
@@ -177,17 +235,53 @@ export async function findCalendarAvailability(config, caseInfo, messageText = "
       `https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?${params}`
     );
     const events = data?.items || [];
+    const checkedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
     results.push({
       calendarId: calendar.id,
       name: calendar.name || calendar.id,
       staffName: calendar.staffName || "",
       events,
       preference,
-      availableSlots: buildAvailableSlots(events, preference)
+      checkedAt,
+      expiresAt,
+      availableSlots: buildAvailableSlots(events, preference).map((slot, index) => ({
+        ...slot,
+        slotId: buildSlotId(calendar, slot, index),
+        calendarId: calendar.id,
+        staffName: calendar.staffName || calendar.name || "",
+        checkedAt,
+        expiresAt
+      }))
     });
   }
 
   return results;
+}
+
+export async function verifyCalendarSlotAvailable(config, slot) {
+  if (!slot?.calendarId || !slot.start || !slot.end) return { ok: false, reason: "候補枠情報が不足しています" };
+
+  const params = new URLSearchParams({
+    timeMin: new Date(slot.start).toISOString(),
+    timeMax: new Date(slot.end).toISOString(),
+    singleEvents: "true",
+    orderBy: "startTime",
+    maxResults: "10"
+  });
+  const encodedId = encodeURIComponent(slot.calendarId);
+  const data = await googleGet(
+    config,
+    `https://www.googleapis.com/calendar/v3/calendars/${encodedId}/events?${params}`
+  );
+  const events = data?.items || [];
+  const start = new Date(slot.start);
+  const end = new Date(slot.end);
+  return {
+    ok: !hasConflict(events, start, end),
+    reason: events.length ? "候補枠に予定が入っています" : "",
+    events
+  };
 }
 
 async function readDriveFileText(config, file) {
@@ -296,6 +390,97 @@ function extractCaseFields(text) {
   return removeEmpty(fields);
 }
 
+function extractCaseFieldsFromRecord(record) {
+  return removeEmpty({
+    customerName: pickRecordField(record, ["顧客名", "お客様名", "氏名", "名前"]),
+    caseId: pickRecordField(record, ["案件ID", "案件番号", "管理番号", "ID"]),
+    customerType: pickRecordField(record, ["新規/OB", "顧客区分", "区分", "新規・OB"]),
+    staffName: pickRecordField(record, ["担当者", "営業担当", "担当", "現調担当"]),
+    caseStatus: pickRecordField(record, ["ステータス", "案件ステータス", "進捗", "状態"]),
+    estimateStatus: pickRecordField(record, ["見積提出済み", "見積", "見積状況"]),
+    constructionSchedule: pickRecordField(record, ["工事予定", "施工予定", "工事日", "施工日"]),
+    complaintHistory: pickRecordField(record, ["クレーム履歴", "トラブル履歴", "クレーム", "トラブル"]),
+    phone: pickRecordField(record, ["電話番号", "TEL", "携帯"]),
+    address: pickRecordField(record, ["住所", "現場住所", "施工住所"])
+  });
+}
+
+function pickRecordField(record, labels) {
+  for (const label of labels) {
+    const value = record[normalizeHeader(label)];
+    if (value) return cleanupValue(value);
+  }
+  return "";
+}
+
+function scoreCaseRecord(record, messageText, sourceUserId, terms) {
+  const values = Object.values(record).map((value) => String(value || ""));
+  const joined = values.join(" ");
+  const normalizedMessage = String(messageText || "").normalize("NFKC");
+  let score = 0;
+
+  for (const term of terms || []) {
+    if (term && joined.includes(term)) score += term === sourceUserId ? 5 : 2;
+  }
+
+  const phone = normalizedMessage.match(/0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}/)?.[0]?.replace(/\D/g, "");
+  if (phone && joined.replace(/\D/g, "").includes(phone)) score += 4;
+
+  const caseId = normalizedMessage.match(/[A-Z]{1,5}-?\d{3,}/i)?.[0];
+  if (caseId && joined.toLowerCase().includes(caseId.toLowerCase())) score += 5;
+
+  const nameMatch = normalizedMessage.match(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]{2,12})(様|さん|さま)/u);
+  if (nameMatch && joined.includes(nameMatch[1])) score += 3;
+
+  return score;
+}
+
+function normalizeHeader(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function parseCsv(csv) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < String(csv || "").length; index += 1) {
+    const char = csv[index];
+    const next = csv[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      field += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      row.push(field.trim());
+      field = "";
+      continue;
+    }
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(field.trim());
+      if (row.some((value) => value)) rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+    field += char;
+  }
+
+  row.push(field.trim());
+  if (row.some((value) => value)) rows.push(row);
+  return rows;
+}
+
 function pickField(text, labels) {
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -387,7 +572,7 @@ function buildAvailableSlots(events, preference = emptySchedulePreference(), now
 }
 
 function parseSchedulePreference(text, now = new Date()) {
-  const normalized = String(text || "").normalize("NFKC");
+  const normalized = normalizeScheduleText(text);
   const preference = emptySchedulePreference();
 
   const weekdayMap = [
@@ -410,6 +595,12 @@ function parseSchedulePreference(text, now = new Date()) {
     if (pattern.test(normalized)) preference.weekdays.push(value);
   }
 
+  const relativeWeek = normalized.includes("来週")
+    ? "next"
+    : normalized.includes("今週")
+      ? "this"
+      : "";
+
   const current = toJstParts(now);
   const datePattern = /(?:(\d{4})[年\/.-])?(\d{1,2})[月\/.-](\d{1,2})日?/g;
   for (const match of normalized.matchAll(datePattern)) {
@@ -430,6 +621,11 @@ function parseSchedulePreference(text, now = new Date()) {
     }
   }
 
+  if (!preference.explicitDates.length && relativeWeek && preference.weekdays.length === 1) {
+    const target = resolveRelativeWeekday(preference.weekdays[0], relativeWeek, now);
+    if (target) preference.explicitDates.push(formatJstDateKey(target));
+  }
+
   if (/明日/.test(normalized)) {
     const target = toJstParts(new Date(now.getTime() + 24 * 60 * 60 * 1000));
     preference.explicitDates.push(formatJstDateKey(target));
@@ -439,14 +635,19 @@ function parseSchedulePreference(text, now = new Date()) {
     preference.explicitDates.push(formatJstDateKey(target));
   }
 
-  const afterMatch = normalized.match(/([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*分?\s*(?:以降|から|後|あと)/);
+  const afterMatch = normalized.match(/(午前|午後)?\s*([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*(半)?\s*分?\s*(?:以降|から|後|あと)/);
   if (afterMatch) {
-    preference.availableAfterMinutes = Number(afterMatch[1]) * 60 + Number(afterMatch[2] || 0);
+    preference.availableAfterMinutes = parseClockMinutes(afterMatch[2], afterMatch[3], afterMatch[4], afterMatch[1]);
   }
 
-  const exactMatch = normalized.match(/([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*分?\s*(?:で|に|なら|希望|お願いします|大丈夫)/);
+  const beforeMatch = normalized.match(/(午前|午後)?\s*([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*(半)?\s*分?\s*(?:まで|以前|前)/);
+  if (beforeMatch) {
+    preference.availableBeforeMinutes = parseClockMinutes(beforeMatch[2], beforeMatch[3], beforeMatch[4], beforeMatch[1]);
+  }
+
+  const exactMatch = normalized.match(/(午前|午後)?\s*([01]?\d|2[0-3])(?:[:時]([0-5]\d))?\s*(半)?\s*分?\s*(?:で|に|なら|希望|お願いします|大丈夫)/);
   if (exactMatch && !preference.availableAfterMinutes) {
-    preference.exactMinutes = Number(exactMatch[1]) * 60 + Number(exactMatch[2] || 0);
+    preference.exactMinutes = parseClockMinutes(exactMatch[2], exactMatch[3], exactMatch[4], exactMatch[1]);
   }
 
   if (/午前|朝|10時|10:00/.test(normalized)) preference.hours.push(10);
@@ -469,12 +670,21 @@ function parseSchedulePreference(text, now = new Date()) {
   return preference;
 }
 
+function normalizeScheduleText(text) {
+  return String(text || "")
+    .normalize("NFKC")
+    .replace(/(午前|午後)?\s*([01]?\d|2[0-3])時半/g, "$1$2:30")
+    .replace(/(午前|午後)?\s*([01]?\d|2[0-3])時([0-5]\d)分/g, "$1$2:$3")
+    .replace(/(午前|午後)?\s*([01]?\d|2[0-3])時/g, "$1$2:00");
+}
+
 function emptySchedulePreference() {
   return {
     weekdays: [],
     explicitDates: [],
     hours: [],
     availableAfterMinutes: null,
+    availableBeforeMinutes: null,
     exactMinutes: null
   };
 }
@@ -491,11 +701,33 @@ function matchesTimePreference(startMinutes, preference) {
   if (preference.availableAfterMinutes != null && startMinutes < preference.availableAfterMinutes) {
     return false;
   }
+  if (preference.availableBeforeMinutes != null && startMinutes + 60 > preference.availableBeforeMinutes) {
+    return false;
+  }
   if (preference.exactMinutes != null) {
     const nearest = nearestSiteVisitSlotHours(Math.floor(preference.exactMinutes / 60));
     return nearest.includes(startMinutes / 60);
   }
   return true;
+}
+
+function parseClockMinutes(hourText, minuteText, halfText, meridiem) {
+  let hour = Number(hourText);
+  if (meridiem === "午後" && hour < 12) hour += 12;
+  if (meridiem === "午前" && hour === 12) hour = 0;
+  const minute = halfText ? 30 : Number(minuteText || 0);
+  return hour * 60 + minute;
+}
+
+function resolveRelativeWeekday(weekday, relativeWeek, now) {
+  const current = toJstParts(now);
+  const currentStart = fromJstParts(current.year, current.month, current.day, 0, 0);
+  const daysSinceSunday = current.weekday;
+  const thisSunday = new Date(currentStart.getTime() - daysSinceSunday * 24 * 60 * 60 * 1000);
+  const base = relativeWeek === "next"
+    ? new Date(thisSunday.getTime() + 7 * 24 * 60 * 60 * 1000)
+    : thisSunday;
+  return toJstParts(new Date(base.getTime() + weekday * 24 * 60 * 60 * 1000));
 }
 
 function resolveDayOnlyDate(day, weekdays, now) {
@@ -577,6 +809,11 @@ function hasConflict(events, slotStart, slotEnd) {
     const eventEnd = new Date(endValue);
     return eventStart < slotEnd && eventEnd > slotStart;
   });
+}
+
+function buildSlotId(calendar, slot, index) {
+  const raw = `${calendar.id || calendar.name}:${slot.start}:${index}`;
+  return Buffer.from(raw).toString("base64url").slice(0, 32);
 }
 
 export const __googleTest = {

@@ -360,32 +360,39 @@ function buildGeneralReply(ctx) {
 
 function summarizeSiteVisitSlots(calendarInfo) {
   if (!Array.isArray(calendarInfo)) return [];
+  if (calendarInfo.selectedOfferedSlot) {
+    return [formatSlotLabel(calendarInfo.selectedOfferedSlot)];
+  }
   const labels = calendarInfo
     .filter((calendar) => isSiteVisitStaff(calendar.staffName || calendar.name))
     .flatMap((calendar) =>
       (calendar.availableSlots || []).map((slot) => {
-        const start = new Date(slot.start);
-        const end = new Date(slot.end || start.getTime() + 60 * 60 * 1000);
-        const dateLabel = new Intl.DateTimeFormat("ja-JP", {
-          timeZone: "Asia/Tokyo",
-          month: "numeric",
-          day: "numeric",
-          weekday: "short"
-        }).format(start);
-        const startTime = new Intl.DateTimeFormat("ja-JP", {
-          timeZone: "Asia/Tokyo",
-          hour: "2-digit",
-          minute: "2-digit"
-        }).format(start);
-        const endTime = new Intl.DateTimeFormat("ja-JP", {
-          timeZone: "Asia/Tokyo",
-          hour: "2-digit",
-          minute: "2-digit"
-        }).format(end);
-        return `${dateLabel} ${startTime}-${endTime}`;
+        return formatSlotLabel(slot);
       })
     );
   return [...new Set(labels)].slice(0, 4);
+}
+
+function formatSlotLabel(slot) {
+  const start = new Date(slot.start);
+  const end = new Date(slot.end || start.getTime() + 60 * 60 * 1000);
+  const dateLabel = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    month: "numeric",
+    day: "numeric",
+    weekday: "short"
+  }).format(start);
+  const startTime = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(start);
+  const endTime = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(end);
+  return `${dateLabel} ${startTime}-${endTime}`;
 }
 
 function summarizeSchedulePreference(calendarInfo) {
@@ -397,6 +404,8 @@ function summarizeSchedulePreference(calendarInfo) {
     hours: Array.isArray(preference.hours) ? preference.hours : [],
     availableAfterMinutes:
       Number.isFinite(preference.availableAfterMinutes) ? preference.availableAfterMinutes : null,
+    availableBeforeMinutes:
+      Number.isFinite(preference.availableBeforeMinutes) ? preference.availableBeforeMinutes : null,
     exactMinutes: Number.isFinite(preference.exactMinutes) ? preference.exactMinutes : null
   };
 }
@@ -407,6 +416,7 @@ function buildNoSlotLine(preference) {
     preference.explicitDates.length ||
     preference.hours.length ||
     preference.availableAfterMinutes != null ||
+    preference.availableBeforeMinutes != null ||
     preference.exactMinutes != null;
   if (!hasPreference) return "";
 
@@ -427,6 +437,7 @@ function emptySchedulePreference() {
     explicitDates: [],
     hours: [],
     availableAfterMinutes: null,
+    availableBeforeMinutes: null,
     exactMinutes: null
   };
 }
@@ -441,6 +452,8 @@ function formatSchedulePreference(preference) {
 
   if (preference.availableAfterMinutes != null) {
     parts.push(`${formatMinutes(preference.availableAfterMinutes)}以降`);
+  } else if (preference.availableBeforeMinutes != null) {
+    parts.push(`${formatMinutes(preference.availableBeforeMinutes)}まで`);
   } else if (preference.exactMinutes != null) {
     parts.push(`${formatMinutes(preference.exactMinutes)}ごろ`);
   } else if (preference.hours.length === 1) {

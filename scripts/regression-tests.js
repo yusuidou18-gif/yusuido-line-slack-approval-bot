@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { __googleTest } from "../src/google.js";
 import { analyzeMessage, buildReplyDraft } from "../src/rules.js";
 import { buildSlackMessage } from "../src/slack.js";
+import { validateReplyDraft } from "../src/draft.js";
 
 const JST_BASE = new Date("2026-08-25T01:00:00.000Z");
 
@@ -86,6 +87,36 @@ function replyFor(text, availableSlots, preference) {
 }
 
 {
+  const text = "2日水曜日16時半以降は大丈夫です";
+  const slots = slotsFor(text, [
+    blockJst(2026, 9, 2, 10),
+    blockJst(2026, 9, 2, 13)
+  ]);
+  assert.deepEqual(slots.map(jstHour), [17]);
+}
+
+{
+  const text = "2日水曜日16時までなら大丈夫です";
+  const slots = slotsFor(text, [
+    blockJst(2026, 9, 2, 10),
+    blockJst(2026, 9, 2, 13)
+  ]);
+  assert.deepEqual(slots.map(jstHour), [15]);
+}
+
+{
+  const preference = __googleTest.parseSchedulePreference("来週土曜日午後なら大丈夫です", JST_BASE);
+  assert.deepEqual(preference.explicitDates, ["2026-09-05"]);
+  const slots = __googleTest.buildAvailableSlots([], preference, JST_BASE);
+  assert.deepEqual(slots.map(jstHour).slice(0, 3), [13, 15, 17]);
+}
+
+{
+  const slots = slotsFor("日曜日希望です", []);
+  assert.equal(slots.length, 0);
+}
+
+{
   const message = buildSlackMessage(
     { slack: { channelId: "C1", presidentUserId: "U_PRESIDENT", officeUserIds: [], staffUserIds: {} } },
     {
@@ -112,6 +143,18 @@ function replyFor(text, availableSlots, preference) {
   assert.doesNotMatch(header, /U_PRESIDENT/);
   assert.doesNotMatch(approverBlock.text.text, /・社長/);
   assert.doesNotMatch(text, /lineUserId|\"u\":/);
+}
+
+{
+  const validation = validateReplyDraft("Google Driveを確認し、案件ID: A-123 を見ました。ありがとうございます。");
+  assert.equal(validation.ok, false);
+  assert.ok(validation.errors.some((error) => error.includes("社内情報")));
+}
+
+{
+  const validation = validateReplyDraft("お問い合わせありがとうございます。\n内容を確認いたしました。\n担当者が内容を確認いたします。\n確認のうえ、次のご案内をお送りいたします。");
+  assert.equal(validation.ok, false);
+  assert.ok(validation.errors.some((error) => error.includes("一般的")));
 }
 
 console.log("OK: regression tests passed");

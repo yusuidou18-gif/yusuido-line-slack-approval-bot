@@ -8,6 +8,7 @@ LINEで届いた顧客メッセージを受け取り、Google Drive / Googleカ�
 
 - LINE Webhookで顧客メッセージを受信
 - Google Drive内の案件候補ファイルを検索
+- Google Drive内の `湧水堂_案件管理` シートを優先して案件情報を確認
 - Googleカレンダーの予定を確認
 - 会社ルールに基づいて緊急度と社長確認要否を判定
 - Slackへ返信案、判断理由、確認者を投稿
@@ -19,6 +20,8 @@ LINEで届いた顧客メッセージを受け取り、Google Drive / Googleカ�
 - 新しいLINEメッセージ受信時は古い未送信下書きを無効化
 - 曜日、日付、時間帯の希望を読み取り、Googleカレンダーの空き枠に合う候補だけを返信案に反映
 - 承認履歴を `data/approval-requests.json` に保存
+- `DATABASE_URL` がある場合はPostgresに保存
+- `/health/deep` で設定不足、未処理件数、送信失敗件数を確認
 
 ## ファイル構成
 
@@ -30,6 +33,9 @@ src/
   line.js      LINE送信
   google.js    Google Drive / Calendar連携
   storage.js   承認依頼のローカル保存
+  audit.js     監査ログ
+  draft.js     返信案検証
+  llm.js       LLM返信案生成
   security.js  LINE / Slack署名検証
   config.js    環境変数読み込み
 ```
@@ -64,6 +70,12 @@ https://example.com/webhooks/slack/actions
 
 ```text
 https://example.com/health
+```
+
+詳細ヘルスチェック:
+
+```text
+https://example.com/health/deep
 ```
 
 ## LINE側の設定
@@ -116,9 +128,46 @@ Google Cloudでサービスアカウントを作成し、DriveとCalendarの読�
 - `GOOGLE_CLIENT_EMAIL`
 - `GOOGLE_PRIVATE_KEY`
 - `GOOGLE_DRIVE_FOLDER_ID`
+- `GOOGLE_CASE_SHEET_NAME` 省略時は `湧水堂_案件管理`
 - `GOOGLE_CALENDAR_IDS`
 
 Google Driveの対象フォルダは、サービスアカウントに共有してください。Googleカレンダーも同様にサービスアカウントへ共有が必要です。
+
+`湧水堂_案件管理` には、可能であれば以下の列を用意してください。
+
+```text
+案件ID
+顧客名
+LINEユーザーID
+電話番号
+住所
+新規/OB
+担当者
+ステータス
+見積提出済み
+工事予定
+クレーム履歴
+最終更新日
+備考
+```
+
+## 保存先
+
+本番ではPostgres利用を推奨します。Render PostgreSQL、Neon、Supabaseなどで発行される `DATABASE_URL` をRenderの環境変数に設定すると、承認依頼、会話履歴、顧客紐づけがDB保存に切り替わります。
+
+`DATABASE_URL` が未設定の場合は、従来通り `data/*.json` に保存します。これはローカル検証や小規模テスト用です。
+
+## LLM設定
+
+`OPENAI_API_KEY` を設定すると、ルールベースの返信案と案件/日程情報をもとにLLMで返信案を整えます。
+
+```text
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-5.4-mini
+REQUIRE_LLM=false
+```
+
+`REQUIRE_LLM=true` にすると、LLM生成に失敗した場合はSlack上で送信不可になります。最初の運用では `false` にして、ルールベース返信を保険として残すことを推奨します。
 
 ## 承認ルール
 
@@ -129,8 +178,31 @@ LINE送信には以下が必要です。
 - 修正依頼が未解決ではないこと
 - 却下されていないこと
 - 最新の下書きであること
+- 下書き検証に通っていること
+- LINE送信前に送信処理が確保できていること
 
 社長確認が「不要」と判定された通常問い合わせでは、Slackの承認者欄に社長は表示しません。社長確認が「必要」の場合だけ社長を承認者として表示します。
+
+Slackで承認後、前回提示候補をお客様が選んだケースでは、送信直前にGoogleカレンダーを再確認します。候補枠が埋まっていた場合はLINE送信を止め、Slackに再提案が必要な旨を追記します。
+
+## 運用前チェック
+
+変更後は必ず以下を実行してください。
+
+```powershell
+npm.cmd run test:all
+npm.cmd run validate:env
+```
+
+`validate:env` がNGの場合、Render側の環境変数に不足がないか確認してください。
+
+## 障害時
+
+- Slack通知が来ない: Render Logsで `/webhooks/line` の受信とSlack APIエラーを確認
+- 承認してもLINEが届かない: Slack通知のステータス追記、`/health/deep` の `sendFailures`、Render Logsを確認
+- 古い通知を押した: `stale` と表示され、LINE送信は止まります
+- 日程候補が埋まった: `slot_unavailable` となり、再提案が必要です
+- 重大障害時: LINE DevelopersでWebhookを一時停止し、Slack確認後に手動返信へ切り替え
 
 ## 修正依頼
 

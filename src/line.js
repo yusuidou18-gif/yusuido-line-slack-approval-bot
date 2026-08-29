@@ -1,8 +1,8 @@
 import { postJson } from "./http.js";
 
-export async function pushLineMessage(config, to, text) {
+export async function pushLineMessage(config, to, text, retryKey = "") {
   if (!config.line.channelAccessToken) {
-    console.log("[LINE push skipped]", { to, text });
+    console.log("[LINE push skipped]", { retryKey, textLength: String(text || "").length });
     return { ok: true, fallback: true };
   }
 
@@ -12,7 +12,10 @@ export async function pushLineMessage(config, to, text) {
       to,
       messages: [{ type: "text", text }]
     },
-    { authorization: `Bearer ${config.line.channelAccessToken}` }
+    {
+      authorization: `Bearer ${config.line.channelAccessToken}`,
+      ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {})
+    }
   );
 
   if (Object.hasOwn(response, "ok") && !response.ok) {

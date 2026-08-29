@@ -1,5 +1,6 @@
 .env
 data/*.json
+data/*.ndjson
 !data/.gitkeep
 work/
 node_modules/

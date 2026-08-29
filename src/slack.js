@@ -119,6 +119,17 @@ export function buildSlackMessage(config, request) {
   const text = formatSlackFallback(request);
   const mentions = buildMentions(config, request);
   const approverLines = buildApproverLines(request);
+  const warningBlock = request.sendBlockedReason
+    ? [section(`*【送信不可・要修正】*\n${escapeMrkdwn(request.sendBlockedReason)}`)]
+    : [];
+  const scheduleBlock = buildScheduleBlock(request);
+  const actionButtons = request.sendBlockedReason
+    ? [button("編集して再承認", "revise", request), button("却下", "reject", request, "danger")]
+    : [
+        button("この本文をLINE送信", "approve", request, "primary"),
+        button("編集して再承認", "revise", request),
+        button("却下", "reject", request, "danger")
+      ];
 
   return {
     channel: config.slack.channelId,
@@ -143,7 +154,9 @@ export function buildSlackMessage(config, request) {
           field("社長確認", request.presidentRequired ? "必要" : "不要")
         ]
       },
+      ...warningBlock,
       section(`*判断理由:*\n${request.reason}`),
+      ...(scheduleBlock ? [scheduleBlock] : []),
       section(`*【顧客メッセージ】*\n>${escapeMrkdwn(request.customerMessage).replace(/\n/g, "\n>")}`),
       section(`*【AI返信案】*\n${request.replyDraft}`),
       section(
@@ -152,14 +165,28 @@ export function buildSlackMessage(config, request) {
       section(`*承認者:*\n${approverLines}`),
       {
         type: "actions",
-        elements: [
-          button("この本文をLINE送信", "approve", request, "primary"),
-          button("編集して再承認", "revise", request),
-          button("却下", "reject", request, "danger")
-        ]
+        elements: actionButtons
       }
     ]
   };
+}
+
+function buildScheduleBlock(request) {
+  const selected = request.selectedOfferedSlot;
+  if (selected) {
+    return section(`*【日程理解】*\n前回提示候補から選択: ${formatSlotForSlack(selected)}\n承認時にGoogleカレンダーを再確認します。`);
+  }
+
+  const calendars = Array.isArray(request.google?.calendar) ? request.google.calendar : [];
+  const slots = calendars
+    .flatMap((calendar) =>
+      (calendar.availableSlots || []).slice(0, 3).map((slot) =>
+        `・${formatSlotForSlack(slot)}（社内: ${escapeMrkdwn(slot.staffName || calendar.staffName || calendar.name || "未確認")}）`
+      )
+    )
+    .slice(0, 6);
+  if (!slots.length) return null;
+  return section(`*【Googleカレンダー候補】*\n${slots.join("\n")}`);
 }
 
 function buildMentions(config, request) {
@@ -193,6 +220,25 @@ function section(text) {
     type: "section",
     text: { type: "mrkdwn", text }
   };
+}
+
+function formatSlotForSlack(slot) {
+  const start = new Date(slot.start);
+  const end = new Date(slot.end || start.getTime() + 60 * 60 * 1000);
+  const dateLabel = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(start);
+  const endTime = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(end);
+  return `${dateLabel}-${endTime}`;
 }
 
 function button(text, action, request, style) {

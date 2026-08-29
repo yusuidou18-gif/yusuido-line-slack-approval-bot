@@ -62,7 +62,14 @@ export function getConfig() {
       clientEmail: process.env.GOOGLE_CLIENT_EMAIL || "",
       privateKey: (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
       driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || "",
+      caseSheetName: process.env.GOOGLE_CASE_SHEET_NAME || "湧水堂_案件管理",
       calendarIds: optionalJson("GOOGLE_CALENDAR_IDS", [])
+    },
+
+    llm: {
+      apiKey: process.env.OPENAI_API_KEY || "",
+      model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
+      required: process.env.REQUIRE_LLM === "true"
     }
   };
 }

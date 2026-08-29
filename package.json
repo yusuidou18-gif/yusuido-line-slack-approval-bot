@@ -7,10 +7,14 @@
     "start": "node src/server.js",
     "check": "node scripts/check-syntax.js",
     "test": "node scripts/regression-tests.js",
+    "test:all": "npm run check && npm test && npm run smoke",
     "validate:env": "node scripts/validate-env.js",
     "smoke": "node scripts/smoke-test.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
   }
 }

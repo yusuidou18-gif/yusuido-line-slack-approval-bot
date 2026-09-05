@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { fetchWithTimeout } from "./http.js";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
@@ -9,6 +10,7 @@ const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const TEXT_MIMES = new Set(["text/plain", "text/csv"]);
 const SITE_VISIT_STAFF_NAMES = ["下村", "下村奈生", "菅野", "菅野香織"];
 const SITE_VISIT_SLOT_HOURS_JST = [10, 13, 15, 17];
+const GOOGLE_FETCH_TIMEOUT_MS = 10_000;
 
 let cachedToken = null;
 
@@ -56,11 +58,15 @@ async function getAccessToken(config) {
     assertion
   });
 
-  const response = await fetch(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body
-  });
+  const response = await fetchWithTimeout(
+    GOOGLE_TOKEN_URL,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body
+    },
+    GOOGLE_FETCH_TIMEOUT_MS
+  );
   const data = await response.json();
   if (!response.ok) {
     throw new Error(`Google token error: ${data.error_description || data.error}`);
@@ -77,9 +83,13 @@ async function googleGet(config, url) {
   const token = await getAccessToken(config);
   if (!token) return null;
 
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${token}` }
-  });
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: { authorization: `Bearer ${token}` }
+    },
+    GOOGLE_FETCH_TIMEOUT_MS
+  );
   const data = await response.json();
   if (!response.ok) {
     throw new Error(`Google API error: ${data.error?.message || response.statusText}`);
@@ -91,9 +101,13 @@ async function googleGetText(config, url) {
   const token = await getAccessToken(config);
   if (!token) return "";
 
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${token}` }
-  });
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: { authorization: `Bearer ${token}` }
+    },
+    GOOGLE_FETCH_TIMEOUT_MS
+  );
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`Google API error: ${text || response.statusText}`);

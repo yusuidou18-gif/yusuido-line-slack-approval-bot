@@ -9,12 +9,30 @@ const INTERNAL_PATTERNS = [
   /社長確認[:：]/,
   /案件ID[:：]/,
   /LINE ID/i,
-  /lineUserId/i
+  /lineUserId/i,
+  /下村/,
+  /菅野/,
+  /吉原/,
+  /時本/,
+  /廣田/
 ];
 
 const GENERIC_HOLD_PATTERNS = [
   /担当者が内容を確認いたします。?\s*確認のうえ、次のご案内をお送りいたします。?/,
-  /確認いたします。?\s*確認のうえ、あらためてご連絡いたします。?/
+  /確認いたします。?\s*確認のうえ、あらためてご連絡いたします。?/,
+  /内容を確認いたしました。?\s*必要な情報を確認しながら進めさせていただきます。?\s*確認のうえ/
+];
+
+const NEXT_ACTION_PATTERNS = [
+  /お写真/,
+  /ご希望/,
+  /候補/,
+  /お電話/,
+  /対応方針/,
+  /ご案内/,
+  /お知らせ/,
+  /お伺い/,
+  /ご連絡/
 ];
 
 export function createDraftMetadata({ id, version = 1, replyDraft, customerMessage, caseId, lineMessageId, now = new Date() }) {
@@ -42,6 +60,9 @@ export function validateReplyDraft(replyDraft, { allowGeneric = false } = {}) {
   }
   if (!/(ありがとうございます|ご連絡|お問い合わせ)/.test(text)) {
     errors.push("冒頭の謝意または受領表現が不足しています");
+  }
+  if (!NEXT_ACTION_PATTERNS.some((pattern) => pattern.test(text))) {
+    errors.push("次のアクションが不足しています");
   }
 
   return {

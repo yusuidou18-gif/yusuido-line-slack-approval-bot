@@ -37,7 +37,10 @@ const COMPLAINT_KEYWORDS = [
   "聞いてない",
   "トラブル",
   "やり直し",
-  "直っていない"
+  "直っていない",
+  "直っていません",
+  "どうなってる",
+  "どうなっている"
 ];
 
 const MONEY_RISK_KEYWORDS = [
@@ -102,6 +105,22 @@ const OB_KEYWORDS = [
   "工事してもらった",
   "お世話になりました",
   "湧水堂さんで"
+];
+
+const TOPIC_DEFINITIONS = [
+  { key: "toilet", label: "トイレ", patterns: ["トイレ", "便器", "ウォシュレット", "温水洗浄便座"] },
+  { key: "kitchen", label: "キッチン・台所", patterns: ["キッチン", "台所", "シンク", "水栓", "蛇口"] },
+  { key: "bath", label: "浴室・お風呂", patterns: ["浴室", "お風呂", "風呂", "ユニットバス", "シャワー"] },
+  { key: "washstand", label: "洗面まわり", patterns: ["洗面", "洗面台", "洗面所"] },
+  { key: "waterHeater", label: "給湯器", patterns: ["給湯器", "エコキュート", "お湯"] },
+  { key: "leak", label: "水漏れ", patterns: ["水漏れ", "漏水", "漏れ", "止まらない"] },
+  { key: "clog", label: "詰まり", patterns: ["詰まり", "つまった", "詰まった", "流れない"] },
+  { key: "estimate", label: "お見積り", patterns: ["見積", "見積り", "見積もり", "概算"] },
+  { key: "schedule", label: "日程", patterns: ["日程", "予定", "時間", "何時", "曜日", "午前", "午後"] },
+  { key: "construction", label: "工事", patterns: ["工事", "施工", "作業"] },
+  { key: "repair", label: "修理", patterns: ["修理", "直し", "直して", "点検"] },
+  { key: "replacement", label: "交換", patterns: ["交換", "取替", "取り替え"] },
+  { key: "reform", label: "リフォーム", patterns: ["リフォーム", "改修"] }
 ];
 
 const SITE_VISIT_STAFF_NAMES = ["下村", "下村奈生", "菅野", "菅野香織"];
@@ -196,6 +215,9 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
   const staffName = caseData.staffName || "";
   const estimateStatus = caseData.estimateStatus || "";
   const constructionSchedule = caseData.constructionSchedule || "";
+  const topics = detectInquiryTopics(text);
+  const topicLabel = buildTopicLabel(topics);
+  const requestLabel = buildRequestLabel(topics, analysis);
 
   return {
     text,
@@ -203,9 +225,11 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
     caseData,
     hasCase,
     customerName,
-    staffName,
     estimateStatus,
     constructionSchedule,
+    topics,
+    topicLabel,
+    requestLabel,
     slots,
     schedulePreference,
     phone,
@@ -213,7 +237,9 @@ function buildReplyContext({ text, analysis, config, caseInfo, calendarInfo }) {
     slotLine: slots.length
       ? buildSlotLine(slots, schedulePreference)
       : "",
-    staffLine: "担当者が内容を確認いたします。",
+    acknowledgementLine: buildAcknowledgementLine({ topics, topicLabel, requestLabel, analysis }),
+    detailRequestLine: buildDetailRequestLine({ topics, analysis }),
+    caseStatusLine: buildCaseStatusLine({ hasCase, estimateStatus, constructionSchedule }),
     caseLine: hasCase ? "過去のやり取りも確認したうえでご案内いたします。" : "必要な情報を確認しながら進めさせていただきます。",
     noSlotLine: buildNoSlotLine(schedulePreference),
     hoursLine: `受付時間の目安は${hours}です。`
@@ -225,7 +251,7 @@ function buildSlotLine(slots, preference) {
   if (slots.length === 1 && condition) {
     return [
       `${condition}とのこと、承知しました。`,
-      "現地確認は下記のお時間でご案内できそうです。",
+      "現地確認の候補として、下記のお時間をご案内できます。",
       `・${slots[0]}`,
       "こちらのお時間でよろしいでしょうか？"
     ].join("\n");
@@ -245,12 +271,12 @@ function buildEmergencyReply(ctx) {
   return [
     "お問い合わせありがとうございます。",
     "",
-    "ご不安な状況かと存じます。",
-    "水漏れ・漏電・使用できない等の緊急性がある場合は、状況確認を急ぎます。",
+    ctx.acknowledgementLine,
+    "ご不安な状況かと存じますので、状況確認を急ぎます。",
     `お急ぎの場合は、お電話（${ctx.phone}）でもご連絡ください。`,
     "",
-    "社内で確認し、対応可否やお伺い可能時間をあらためてご連絡いたします。",
-    "差し支えなければ、現在の状況が分かるお写真もお送りください。"
+    "対応可否やお伺いできる時間は確認のうえご案内いたします。",
+    ctx.detailRequestLine
   ];
 }
 
@@ -259,8 +285,9 @@ function buildComplaintReply(ctx) {
     "ご連絡ありがとうございます。",
     "",
     "このたびはご不安・ご不快なお気持ちにさせてしまい、申し訳ございません。",
-    ctx.caseLine,
-    "事実関係を確認したうえで、担当者よりあらためてご連絡いたします。",
+    ctx.acknowledgementLine,
+    ctx.caseStatusLine,
+    "事実関係を確認したうえで、今後の対応方針をご連絡いたします。",
     "",
     "確認前に断定したご案内は控えさせていただきますが、誠実に対応いたします。"
   ];
@@ -270,11 +297,11 @@ function buildMoneyReply(ctx) {
   return [
     "お問い合わせありがとうございます。",
     "",
-    "費用に関するご相談として承りました。",
-    "金額・値引き・返金に関わる内容は社内確認が必要なため、現時点では確定したご案内は控えさせていただきます。",
-    ctx.caseLine,
+    ctx.acknowledgementLine,
+    "費用やお支払いに関わる内容は、詳細を確認したうえでご案内いたします。",
+    ctx.caseStatusLine,
     "",
-    "確認のうえ、あらためてご連絡いたします。"
+    "金額や値引き可否はこの場で確約できませんが、内容を整理してご連絡いたします。"
   ];
 }
 
@@ -282,8 +309,9 @@ function buildSiteVisitReply(ctx) {
   const lines = [
     "お問い合わせありがとうございます。",
     "",
-    "状況を拝見したうえで、できるだけ分かりやすくご案内いたします。",
-    ctx.caseLine
+    ctx.acknowledgementLine,
+    "状況を拝見したうえで、必要な内容を分かりやすくご案内いたします。",
+    ctx.caseStatusLine
   ];
 
   if (ctx.slotLine) {
@@ -296,7 +324,7 @@ function buildSiteVisitReply(ctx) {
 
   lines.push(
     "",
-    "差し支えなければ、気になる箇所のお写真と、ご希望の時間帯をお送りください。"
+    ctx.detailRequestLine
   );
   return lines;
 }
@@ -305,8 +333,8 @@ function buildScheduleReply(ctx) {
   const lines = [
     "ご連絡ありがとうございます。",
     "",
-    "日程について確認いたします。",
-    ctx.caseLine
+    ctx.acknowledgementLine,
+    ctx.caseStatusLine
   ];
 
   if (ctx.slotLine) {
@@ -314,11 +342,11 @@ function buildScheduleReply(ctx) {
   } else if (ctx.noSlotLine) {
     lines.push(ctx.noSlotLine);
   } else {
-    lines.push("営業時間は10:00-19:00、定休日は日曜・月曜です。候補日を確認してご案内いたします。");
+    lines.push("営業時間は10:00-19:00、定休日は日曜・月曜です。");
   }
 
   if (!ctx.slotLine) {
-    lines.push("", "ご希望の曜日や時間帯がございましたら、お知らせください。");
+    lines.push("", "火曜から土曜の中で、ご希望の曜日や1時間ほど空く時間帯をお知らせください。");
   }
   return lines;
 }
@@ -327,11 +355,11 @@ function buildObReply(ctx) {
   return [
     "いつもありがとうございます。",
     "",
-    "以前のご対応内容も確認したうえで、優先して確認いたします。",
-    ctx.staffLine,
+    ctx.acknowledgementLine,
+    "以前のご対応内容も確認したうえで、優先して進めます。",
     ctx.slotLine || "必要に応じて、現地確認の日程もご相談させてください。",
     "",
-    "現在の状況が分かるお写真がございましたら、お送りいただけますと確認がスムーズです。"
+    ctx.detailRequestLine
   ];
 }
 
@@ -339,8 +367,9 @@ function buildLegalReply(ctx) {
   return [
     "ご連絡ありがとうございます。",
     "",
+    ctx.acknowledgementLine,
     "内容を真摯に受け止め、社内で確認いたします。",
-    "事実関係を確認したうえで、担当者よりあらためてご連絡いたします。",
+    "事実関係を確認したうえで、今後の対応方針をご連絡いたします。",
     "",
     "確認前に断定したご案内は控えさせていただきますが、できるだけ丁寧に対応いたします。"
   ];
@@ -350,12 +379,86 @@ function buildGeneralReply(ctx) {
   return [
     "お問い合わせありがとうございます。",
     "",
-    "内容を確認いたしました。",
-    ctx.caseLine,
-    ctx.staffLine,
+    ctx.acknowledgementLine,
+    ctx.caseStatusLine,
     "",
-    "確認のうえ、次のご案内をお送りいたします。"
+    "差し支えなければ、ご希望内容や現在の状況が分かるお写真をお送りください。確認して次のご案内をいたします。"
   ];
+}
+
+function detectInquiryTopics(text) {
+  const normalized = normalizeText(text);
+  return TOPIC_DEFINITIONS.filter((topic) =>
+    topic.patterns.some((pattern) => normalized.includes(pattern))
+  );
+}
+
+function buildTopicLabel(topics) {
+  const primary = topics.find((topic) =>
+    ["toilet", "kitchen", "bath", "washstand", "waterHeater", "leak", "clog"].includes(topic.key)
+  );
+  return primary?.label || "";
+}
+
+function buildRequestLabel(topics, analysis) {
+  if (topics.some((topic) => topic.key === "estimate")) return "お見積り";
+  if (topics.some((topic) => topic.key === "schedule") || analysis?.templateKey === "schedule") return "日程";
+  if (topics.some((topic) => topic.key === "replacement")) return "交換";
+  if (topics.some((topic) => topic.key === "repair")) return "修理・点検";
+  if (topics.some((topic) => topic.key === "reform")) return "リフォーム";
+  if (analysis?.needsSiteVisit) return "現地確認";
+  return "お問い合わせ内容";
+}
+
+function buildAcknowledgementLine({ topics, topicLabel, requestLabel, analysis }) {
+  if (analysis?.templateKey === "complaint") {
+    const target = topicLabel ? `${topicLabel}の件` : "今回の件";
+    return `${target}について、状況を確認いたします。`;
+  }
+  if (analysis?.templateKey === "legalReputation") {
+    return "いただいた内容を確認いたしました。";
+  }
+  if (topics.some((topic) => topic.key === "leak")) {
+    return "水漏れの件、承りました。";
+  }
+  if (topics.some((topic) => topic.key === "clog")) {
+    return "詰まりの件、承りました。";
+  }
+  if (topicLabel && requestLabel && requestLabel !== "お問い合わせ内容") {
+    return `${topicLabel}の${requestLabel}について承りました。`;
+  }
+  if (requestLabel === "お見積り") {
+    return "お見積り・費用に関するご相談として承りました。";
+  }
+  if (requestLabel === "日程") {
+    return "日程のご希望について承りました。";
+  }
+  return "お問い合わせ内容を確認いたしました。";
+}
+
+function buildDetailRequestLine({ topics, analysis }) {
+  if (analysis?.templateKey === "schedule") {
+    return "日程調整に必要な内容を確認してご案内いたします。";
+  }
+  if (topics.some((topic) => ["leak", "clog"].includes(topic.key))) {
+    return "可能でしたら、該当箇所のお写真と、いつ頃からの症状かをお送りください。";
+  }
+  if (analysis?.needsSiteVisit || topics.some((topic) => ["toilet", "kitchen", "bath", "washstand", "waterHeater"].includes(topic.key))) {
+    return "差し支えなければ、気になる箇所のお写真と、ご希望の時間帯をお送りください。";
+  }
+  return "確認に必要な点があれば、こちらからあらためてご連絡いたします。";
+}
+
+function buildCaseStatusLine({ hasCase, estimateStatus, constructionSchedule }) {
+  if (estimateStatus) {
+    return "お見積りの状況も確認したうえでご案内いたします。";
+  }
+  if (constructionSchedule) {
+    return "工事予定との関係も確認し、無理のない形でご案内いたします。";
+  }
+  return hasCase
+    ? "過去のやり取りも確認したうえでご案内いたします。"
+    : "いただいた内容をもとに、確認に必要な点を整理いたします。";
 }
 
 function summarizeSiteVisitSlots(calendarInfo) {

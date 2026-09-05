@@ -5,7 +5,7 @@ import { readRawBody, sendJson, sendText } from "./http.js";
 import { verifyLineSignature, verifySlackSignature, createId, createUuid } from "./security.js";
 import { findCalendarAvailability, findDriveCaseInfo, verifyCalendarSlotAvailable } from "./google.js";
 import { analyzeMessage, buildReplyDraft } from "./rules.js";
-import { pushLineMessage, extractTextEvents } from "./line.js";
+import { replyLineMessage, pushLineMessage, extractTextEvents } from "./line.js";
 import { openRevisionModal, postApprovalRequest, updateSlackMessage } from "./slack.js";
 import { audit, maskId } from "./audit.js";
 import { createDraftMetadata, validateReplyDraft } from "./draft.js";
@@ -387,7 +387,8 @@ async function handleSlackAction(req, res) {
       }
     }
     try {
-      await pushLineMessage(config, claimed.lineUserId, claimed.replyDraft, claimed.sendRetryKey || requestId);
+      const lineSend = await sendApprovedLineMessage(config, claimed, requestId);
+      claimed.lineSendMethod = lineSend.method || "push";
     } catch (error) {
       await updateRequest(requestId, (request) => ({
         ...request,
@@ -417,7 +418,7 @@ async function handleSlackAction(req, res) {
         {
           at: new Date().toISOString(),
           type: "line_sent",
-          note: "承認後に公式LINEへ送信"
+          note: `承認後に公式LINEへ送信 (${claimed.lineSendMethod || "push"})`
         }
       ]
     }));
@@ -428,8 +429,12 @@ async function handleSlackAction(req, res) {
       draftId: claimed.draft?.id || "",
       text: claimed.replyDraft
     });
-    await audit("line_message_sent", { requestId, retryKey: claimed.sendRetryKey || requestId });
-    await updateSlackMessage(config, payload, `送信完了: ${requestId}`);
+    await audit("line_message_sent", {
+      requestId,
+      retryKey: claimed.sendRetryKey || requestId,
+      method: claimed.lineSendMethod || "push"
+    });
+    await updateSlackMessage(config, payload, `送信完了: ${requestId}\n送信方法: ${claimed.lineSendMethod || "push"}`);
     return sendText(res, 200, "承認が揃ったためLINEへ送信しました。");
   }
 
@@ -449,6 +454,35 @@ async function handleSlackAction(req, res) {
   }
 
   sendText(res, 200, "承認を記録しました。もう一方の承認待ちです。");
+}
+
+async function sendApprovedLineMessage(config, request, requestId) {
+  if (canUseReplyToken(request)) {
+    try {
+      return await replyLineMessage(config, request.replyToken, request.replyDraft);
+    } catch (error) {
+      if (!isReplyTokenExpiredError(error)) throw error;
+      await audit("line_reply_token_expired_fallback", { requestId, error: error.message });
+    }
+  }
+
+  return await pushLineMessage(
+    config,
+    request.lineUserId,
+    request.replyDraft,
+    request.sendRetryKey || requestId
+  );
+}
+
+function canUseReplyToken(request) {
+  if (!request.replyToken || !request.createdAt) return false;
+  const ageMs = Date.now() - new Date(request.createdAt).getTime();
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 55_000;
+}
+
+function isReplyTokenExpiredError(error) {
+  const message = String(error?.message || "");
+  return message.includes("Invalid reply token") || message.includes("reply token");
 }
 
 async function handleRevisionSubmission(payload, res) {

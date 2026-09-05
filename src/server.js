@@ -110,11 +110,20 @@ async function handleLineWebhook(req, res) {
     textEventCount: events.length
   });
 
-  for (const event of events) {
-    await processLineTextEvent(event);
-  }
-
   sendJson(res, 200, { ok: true });
+
+  for (const event of events) {
+    processLineTextEvent(event).catch((error) => {
+      console.error("[LINE text event async failed]", error.message);
+      audit("line_message_async_failed", {
+        lineMessageId: event.message?.id || "",
+        lineUserId: event.source?.userId || "",
+        error: error.message
+      }).catch((auditError) => {
+        console.error("[audit failed]", auditError.message);
+      });
+    });
+  }
 }
 
 async function processLineTextEvent(event) {
@@ -209,10 +218,10 @@ async function processLineTextEvent(event) {
     customerMessage: text,
     customerName: driveCase.customerName || detectCustomerName(text),
     caseId: driveCase.caseId || detectCaseId(text),
-    customerType: driveCase.customerType || (analysis.isOb ? "OB" : "\u672a\u78ba\u8a8d"),
-    staffName: staffName || "\u672a\u78ba\u8a8d",
+    customerType: driveCase.customerType || (analysis.isOb ? "OB" : "未確認"),
+    staffName: staffName || "未確認",
     staffSlackUserId,
-    caseStatus: driveCase.caseStatus || "\u672a\u78ba\u8a8d",
+    caseStatus: driveCase.caseStatus || "未確認",
     urgency: analysis.urgency,
     presidentRequired: analysis.presidentRequired,
     reason: buildReason(analysis, caseInfo, calendarInfo),
@@ -660,10 +669,10 @@ function buildReason(analysis, caseInfo, calendarInfo) {
   const parts = [analysis.reason];
   if (caseInfo?.note) parts.push(caseInfo.note);
   const slots = summarizeAvailableSlots(calendarInfo);
-  if (slots.length) parts.push(`\u73fe\u8abf\u5019\u88dc: ${slots.join(" / ")}`);
-  if (caseInfo?.error) parts.push(`Google Drive\u78ba\u8a8d\u30a8\u30e9\u30fc: ${caseInfo.error}`);
-  if (calendarInfo?.error) parts.push(`Google\u30ab\u30ec\u30f3\u30c0\u30fc\u78ba\u8a8d\u30a8\u30e9\u30fc: ${calendarInfo.error}`);
-  return parts.join("\u3002 ");
+  if (slots.length) parts.push(`現調候補: ${slots.join(" / ")}`);
+  if (caseInfo?.error) parts.push(`Google Drive確認エラー: ${caseInfo.error}`);
+  if (calendarInfo?.error) parts.push(`Googleカレンダー確認エラー: ${calendarInfo.error}`);
+  return parts.join("。 ");
 }
 
 function summarizeAvailableSlots(calendarInfo) {
@@ -818,20 +827,20 @@ function countOlderThan(requests, statuses, minutes) {
 }
 
 function detectCustomerName(text) {
-  const match = text.match(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc]{2,12})(\u69d8|\u3055\u3093|\u3055\u307e)/u);
-  return match ? `${match[1]}\u69d8` : "\u672a\u78ba\u8a8d";
+  const match = text.match(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]{2,12})(様|さん|さま)/u);
+  return match ? `${match[1]}様` : "未確認";
 }
 
 function detectCaseId(text) {
   const match = text.match(/[A-Z]{1,5}-?\d{3,}/i);
-  return match ? match[0] : "\u672a\u78ba\u8a8d";
+  return match ? match[0] : "未確認";
 }
 
 function detectStaffName(caseInfo) {
   if (caseInfo?.case?.staffName) return caseInfo.case.staffName;
   const files = caseInfo?.matchedFiles || [];
   const joined = files.map((file) => `${file.name} ${file.textPreview || ""}`).join(" ");
-  const match = joined.match(/(?:\u62c5\u5f53\u8005|\u55b6\u696d\u62c5\u5f53|\u62c5\u5f53|\u73fe\u8abf\u62c5\u5f53)\s*[\uff1a:\-\s]\s*([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc]{2,12})/u);
+  const match = joined.match(/(?:担当者|営業担当|担当|現調担当)\s*[：:\-\s]\s*([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]{2,12})/u);
   return match ? match[1] : "";
 }
 

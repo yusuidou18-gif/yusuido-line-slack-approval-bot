@@ -157,4 +157,46 @@ function replyFor(text, availableSlots, preference) {
   assert.ok(validation.errors.some((error) => error.includes("一般的")));
 }
 
+{
+  const preference = __googleTest.parseSchedulePreference("トイレ交換の見積をお願いします。土曜日の午後希望です", JST_BASE);
+  const slots = slotsFor("トイレ交換の見積をお願いします。土曜日の午後希望です", []);
+  const reply = replyFor("トイレ交換の見積をお願いします。土曜日の午後希望です", slots, preference);
+  assert.match(reply, /トイレ/);
+  assert.match(reply, /お見積り|見積/);
+  assert.match(reply, /土曜日|土曜/);
+  assert.match(reply, /・/);
+  assert.doesNotMatch(reply, /担当者が内容を確認いたします/);
+  assert.doesNotMatch(reply, /下村|菅野/);
+}
+
+{
+  const preference = __googleTest.parseSchedulePreference("日曜日に現地調査をお願いできますか？", JST_BASE);
+  const reply = replyFor("日曜日に現地調査をお願いできますか？", [], preference);
+  assert.match(reply, /日曜・月曜は定休日/);
+  assert.match(reply, /火曜から土曜/);
+  assert.doesNotMatch(reply, /工事日を確定|確約/);
+}
+
+{
+  const analysis = analyzeMessage("見積が高いので値引きできますか？", { matchedFiles: [{ id: "case" }], case: { estimateStatus: "提出済み" } });
+  const reply = buildReplyDraft({ text: "見積が高いので値引きできますか？", analysis, config: {}, caseInfo: { matchedFiles: [{ id: "case" }], case: { estimateStatus: "提出済み" } }, calendarInfo: [] });
+  assert.match(reply, /費用|金額|お見積り/);
+  assert.match(reply, /確約できません/);
+  assert.doesNotMatch(reply, /値引きできます|割引します|無料にします/);
+}
+
+{
+  const analysis = analyzeMessage("工事後なのに直っていません。どうなってるんですか", { matchedFiles: [{ id: "case" }], case: {} });
+  const reply = buildReplyDraft({ text: "工事後なのに直っていません。どうなってるんですか", analysis, config: {}, caseInfo: { matchedFiles: [{ id: "case" }], case: {} }, calendarInfo: [] });
+  assert.match(reply, /申し訳ございません/);
+  assert.match(reply, /対応方針/);
+  assert.doesNotMatch(reply, /しかし|ただし|お客様/);
+}
+
+{
+  const validation = validateReplyDraft("お問い合わせありがとうございます。\n下村が確認してご案内いたします。");
+  assert.equal(validation.ok, false);
+  assert.ok(validation.errors.some((error) => error.includes("社内情報")));
+}
+
 console.log("OK: regression tests passed");

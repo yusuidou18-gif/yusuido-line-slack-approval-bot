@@ -178,6 +178,14 @@ function replyFor(text, availableSlots, preference) {
 }
 
 {
+  const preference = __googleTest.parseSchedulePreference("現地調査は土日希望です", JST_BASE);
+  const reply = replyFor("現地調査は土日希望です", [], preference);
+  assert.match(reply, /日曜・月曜は定休日/);
+  assert.match(reply, /営業日の候補/);
+  assert.match(reply, /1時間幅/);
+}
+
+{
   const analysis = analyzeMessage("見積が高いので値引きできますか？", { matchedFiles: [{ id: "case" }], case: { estimateStatus: "提出済み" } });
   const reply = buildReplyDraft({ text: "見積が高いので値引きできますか？", analysis, config: {}, caseInfo: { matchedFiles: [{ id: "case" }], case: { estimateStatus: "提出済み" } }, calendarInfo: [] });
   assert.match(reply, /費用|金額|お見積り/);

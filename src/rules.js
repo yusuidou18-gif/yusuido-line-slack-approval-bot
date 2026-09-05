@@ -531,6 +531,12 @@ function buildNoSlotLine(preference) {
     return "日曜・月曜は定休日のため、火曜から土曜の営業時間内（10:00-19:00）で候補日を確認いたします。";
   }
 
+  const includesClosedWeekday = preference.weekdays.some((day) => day === 0 || day === 1);
+  const includesClosedDate = preference.explicitDates.some((date) => isClosedDateKey(date));
+  if (includesClosedWeekday || includesClosedDate) {
+    return "ご希望日のうち日曜・月曜は定休日のため、営業日の候補を中心に空き状況を確認いたします。確認でき次第、1時間幅で候補日をご案内いたします。";
+  }
+
   return "ご希望に近い日程を確認いたしましたが、現時点で自動候補が見つかりませんでした。空き状況を確認して、あらためて候補日をご案内いたします。";
 }
 
